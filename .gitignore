@@ -5,6 +5,7 @@ onebot-qzone/.env
 
 # ==== 第三方运行包与登录态（my-maibot 仅白名单自研插件）====
 NapCat-OneKey/
+onebot-qzone/
 my-maibot/*
 !my-maibot/plugins/
 my-maibot/plugins/*
@@ -27,3 +28,4 @@ __pycache__/
 WAITING_QR_SCAN.flag
 my-maibot/maibot_statistics.html
 *.tmp
+.mimosa/

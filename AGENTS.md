@@ -6,6 +6,25 @@
 
 QQ 小号「大肥鱼」（鲸鱼娘人设）= MaiBot（LLM 框架）+ NapCat（QQ 协议端）+ DeepSeek/商汤/智谱 API，外加一组**计划任务驱动的根目录 Python 脚本**做守护、认知、记账、定时消息。
 
+## 部署与代码同步（⚠️ 当前生产 = 华为云服务器）
+
+> 2026-10 已整体迁移：生产运行在华为云 `1.95.124.70` 的 `/root/maibot/`（systemd 服务 + crontab，root SSH 密钥免密）。本机 Windows 目录只是开发副本，本机所有计划任务已禁用，**勿 re-enable（双端同时在线会互踢）**。下方"架构"一节保留的是本机历史拓扑；服务器上对应为 systemd + cron，根目录脚本是 **Linux 版（同名不同实现，以服务器版为准）**。
+
+**代码真源 = GitHub 私有仓库（git 管理），禁止全量拷贝目录。** 仓库：`git@github.com:wdjwdjwdjwdj/QQ-DeepSeek-Bot.git`（私有，https://github.com/wdjwdjwdjwdj/QQ-DeepSeek-Bot）。服务器 `/root/maibot` 为生产基线（部署密钥 maibot-server 直推）；本机 clone 在 `C:\Users\29688\Desktop\脚本\QQ-DeepSeek-Bot-repo`（SSH 别名 `github.com-deepseek`，部署密钥 local-dev；旧目录 `QQ-DeepSeek-Bot\` 仅作历史存档，勿再改）。服务器与本地都是它的克隆：
+
+1. **常规修改**：本地 clone 里改（直接告诉 AI 要改什么即可）→ `git add/commit/push` → 服务器 `cd /root/maibot && git pull` → 重启相关服务（systemd 单元需 restart；纯 cron 脚本下轮自动生效）。
+2. **服务器热修**：可以在 `/root/maibot` 直接改文件，但改完必须**立刻** `git add/commit/push`，回到本地后先 `git pull`。禁止热修不回传——仓库必须始终是最新真源。
+3. **双端纪律**：任何一端开工改代码前先 `git pull`；不要两头同时改同一文件。
+4. **小改动可让 AI 经 SSH 直改服务器**并当场 commit；正式/批量改动走"本地改 → push → 服务器 pull"。
+
+不进仓库（.gitignore；换机重建时需手工恢复）：
+
+- 密钥：`napcat.env`、`my-maibot/config/model_config.toml`（所有 API key 都在这）
+- 第三方运行包与登录态：`NapCat-OneKey/`、`onebot-qzone/`（第三方 Qzone 桥接，重建= `git clone https://github.com/Gu-Heping/onebot-qzone` → `npm install --registry=https://registry.npmmirror.com` → `npm run build`；服务器现存副本不受影响）、`my-maibot/` 整体忽略（仅白名单自研插件 `my-maibot/plugins/SchedulerManager/`、`my-maibot/plugins/FriendLedger/`）
+- 运行时状态：`data/`、`logs/`、`*.log`、`*_state.json`、`schedule_config.json`、`friends.json`、`life_state.json`、`user_profile.json`、`wallet.json`、`__pycache__/`
+
+仓库必须设为 **Private**。换机重建 = `git clone` + 手工恢复上述被忽略的密钥与状态文件。
+
 ## 架构（真实拓扑）
 
 ```
