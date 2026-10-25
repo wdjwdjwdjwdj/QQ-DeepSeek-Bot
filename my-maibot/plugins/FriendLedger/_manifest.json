@@ -1,0 +1,32 @@
+{
+  "manifest_version": 2,
+  "version": "1.0.0",
+  "name": "关系账本 (Friend Ledger)",
+  "description": "注册 LLM 工具让大肥鱼在聊天中查询自己与群友的感情分（friends_ledger.py 维护的 friends.json），有人问感情分/关系好坏时调用",
+  "author": {
+    "name": "local",
+    "url": "https://example.com/local"
+  },
+  "license": "MIT",
+  "urls": {
+    "repository": "https://example.com/local/friend-ledger"
+  },
+  "plugin_type": "extension",
+  "host_application": {
+    "min_version": "1.2.0",
+    "max_version": "1.3.99"
+  },
+  "sdk": {
+    "min_version": "2.5.0",
+    "max_version": "2.99.99"
+  },
+  "dependencies": [],
+  "capabilities": [],
+  "i18n": {
+    "default_locale": "zh-CN",
+    "supported_locales": [
+      "zh-CN"
+    ]
+  },
+  "id": "local.friend-ledger"
+}

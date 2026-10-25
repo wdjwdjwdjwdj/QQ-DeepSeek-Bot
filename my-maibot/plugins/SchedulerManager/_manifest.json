@@ -1,0 +1,32 @@
+{
+  "manifest_version": 2,
+  "version": "1.0.0",
+  "name": "定时消息管家 (Scheduler Manager)",
+  "description": "注册 LLM 工具让大肥鱼在聊天中创建/查看/删除定时消息任务，任务写入 schedule_config.json，由外部 scheduled_sender.py 定时发送",
+  "author": {
+    "name": "local",
+    "url": "https://example.com/local"
+  },
+  "license": "MIT",
+  "urls": {
+    "repository": "https://example.com/local/scheduler-manager"
+  },
+  "plugin_type": "extension",
+  "host_application": {
+    "min_version": "1.2.0",
+    "max_version": "1.3.99"
+  },
+  "sdk": {
+    "min_version": "2.5.0",
+    "max_version": "2.99.99"
+  },
+  "dependencies": [],
+  "capabilities": [],
+  "i18n": {
+    "default_locale": "zh-CN",
+    "supported_locales": [
+      "zh-CN"
+    ]
+  },
+  "id": "local.scheduler-manager"
+}

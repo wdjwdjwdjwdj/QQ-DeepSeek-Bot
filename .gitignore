@@ -5,11 +5,11 @@ onebot-qzone/.env
 
 # ==== 第三方运行包与登录态（my-maibot 仅白名单自研插件）====
 NapCat-OneKey/
-my-maibot/**
+my-maibot/*
 !my-maibot/plugins/
-my-maibot/plugins/**
-!my-maibot/plugins/SchedulerManager/
-!my-maibot/plugins/FriendLedger/
+my-maibot/plugins/*
+!my-maibot/plugins/SchedulerManager
+!my-maibot/plugins/FriendLedger
 onebot-qzone/node_modules/
 onebot-qzone/test_cache/
 
