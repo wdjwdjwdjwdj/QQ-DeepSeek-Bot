@@ -251,7 +251,6 @@ def main():
     def weighted_pick(pool, n):
         rest = [p for p in pool if p["weight"] > 0]
         picks = []
-        rest = list(live)
         while rest and len(picks) < n:
             total = sum(p["weight"] for p in rest)
             roll = secrets.randbelow(total) + 1
@@ -324,4 +323,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception:
+        import traceback
+        log("未捕获异常:\n" + traceback.format_exc()[-800:])
+        raise SystemExit(1)
