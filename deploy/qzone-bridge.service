@@ -1,0 +1,13 @@
+[Unit]
+Description=OneBot-QZone Bridge (QZone 社交引擎桥接 :5700)
+After=network-online.target napcat.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/maibot/onebot-qzone
+ExecStart=/usr/bin/node dist/main.js
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=MaiBot (大肥鱼) QQ AI Bot
+After=network-online.target napcat.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/maibot/my-maibot
+ExecStart=/root/.local/bin/maibot run --directory .
+Environment=EULA_AGREE=8e6e7d647f7f82d6ea98456b73908656
+Environment=PRIVACY_AGREE=91e5db7659c560bc3545e63859b6ebc0
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

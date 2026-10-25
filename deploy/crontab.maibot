@@ -1,0 +1,44 @@
+# QQ-DeepSeek-Bot 服务器 crontab（root）
+# 由 Windows 计划任务迁移而来，脚本路径固定 /root/maibot/
+# 日志统一落 /root/maibot/logs/cron_*.log，由 logrotate 轮转
+SHELL=/bin/bash
+MAILTO=""
+
+# 每2分钟：watchdog 全链路守护自愈
+*/2 * * * * cd /root/maibot && /usr/bin/python3 watchdog.py >> logs/cron_watchdog.log 2>&1
+
+# 每1分钟：定时消息（读 schedule_config.json）
+* * * * * cd /root/maibot && /usr/bin/python3 scheduled_sender.py >> logs/cron_sender.log 2>&1
+
+# 每2分钟：新人入群欢迎
+*/2 * * * * cd /root/maibot && /usr/bin/python3 welcome_bot.py >> logs/cron_welcome.log 2>&1
+
+# 每10分钟：认知引擎（情绪/意图/矛盾/技能卡 + prompt 注入）
+*/10 * * * * cd /root/maibot && /usr/bin/python3 cognition.py >> logs/cron_cognition.log 2>&1
+
+# 每30分钟：DeepSeek 余额守护（<2元私聊求救，4h冷却）
+*/30 * * * * cd /root/maibot && /usr/bin/python3 token_guard.py >> logs/cron_token_guard.log 2>&1
+
+# 每30分钟：随机主动找姐聊天（概率门控+冷却+日上限）
+*/30 * * * * cd /root/maibot && /usr/bin/python3 sister_chat.py >> logs/cron_sister_chat.log 2>&1
+
+# 每小时:10：Qzone 社交（点赞+AI评论，拟人节律）
+10 * * * * cd /root/maibot && /usr/bin/python3 qzone_social.py >> logs/cron_qzone_social.log 2>&1
+
+# 每日 04:45：关系账本滚动复盘
+45 4 * * * cd /root/maibot && /usr/bin/python3 friends_ledger.py --review >> logs/cron_friends.log 2>&1
+
+# 每日 03:00：人设漂移审查
+0 3 * * * cd /root/maibot && /usr/bin/python3 persona_audit.py >> logs/cron_persona.log 2>&1
+
+# 每日 05:00：生活引擎（时间线/鱼粮/周观察）
+0 5 * * * cd /root/maibot && /usr/bin/python3 daily_life.py >> logs/cron_dailylife.log 2>&1
+
+# 每12小时：上下文半日归档
+30 0,12 * * * cd /root/maibot && /usr/bin/python3 context_memory.py >> logs/cron_contextmem.log 2>&1
+
+# 每日 19:40：朋友圈发说说（读 post_draft，85%概率）
+40 19 * * * cd /root/maibot && /usr/bin/python3 qzone_poster.py >> logs/cron_qzoneposter.log 2>&1
+
+# 每日 21:00：当日账单报告
+0 21 * * * cd /root/maibot && /usr/bin/python3 token_guard.py --report >> logs/cron_dailyreport.log 2>&1

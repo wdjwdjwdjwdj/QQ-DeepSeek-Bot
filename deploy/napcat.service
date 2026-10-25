@@ -1,0 +1,16 @@
+[Unit]
+Description=NapCat QQ Protocol Service (QQ 协议端)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/NapCat/opt/QQ
+Environment=HOME=/root
+EnvironmentFile=/root/maibot/napcat.env
+ExecStart=/usr/bin/xvfb-run -a /root/NapCat/opt/QQ/qq --no-sandbox --disable-gpu
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

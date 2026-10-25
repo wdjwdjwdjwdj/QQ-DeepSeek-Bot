@@ -1,0 +1,10 @@
+/root/maibot/watchdog.log /root/maibot/*.log /root/maibot/logs/cron_*.log {
+    daily
+    rotate 7
+    maxsize 50M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+}
