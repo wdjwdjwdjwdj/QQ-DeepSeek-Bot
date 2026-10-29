@@ -7,7 +7,7 @@
 3. P4 拍立得：高光事件 → cogview-3-flash 免费生图（每天≤1张，失败不阻塞）
 4. P5 周观察：每7天免费池总结"她眼中的哥" → user_profile.json
 产物由 cognition.py 每10分钟读走注入 chat prompt；本脚本不发任何 QQ 消息。
-网络边界（见 botcommon.py）：open.bigmodel.cn / api.deepseek.com / maas-watermark-prod-new.cn-wlcb.ufileos.com
+网络边界（见 botcommon.py）：api.z.ai / open.bigmodel.cn / token.sensenova.cn / maas-watermark-prod-new.cn-wlcb.ufileos.com
 / wttr.in 均 https；key 只从 model_config.toml 读取。
 用法：py daily_life.py           （定时任务入口，当天已生成则只刷钱包）
       py daily_life.py --test   （强制重新生成全部并打印，用于人工验证）
@@ -34,7 +34,6 @@ PHOTO_DIR = BASE / "data" / "life_photos"
 OWNER_QQ = 2968874474
 
 ALLOWED_LLM = {"open.bigmodel.cn": {"https"}}                            # 智谱免费生成/生图
-ALLOWED_DS = {"api.deepseek.com": {"https"}}                               # LiveFix: 智谱挂了走 DeepSeek
 ALLOWED_CDN = {"maas-watermark-prod-new.cn-wlcb.ufileos.com": {"https"}}  # 生图结果下载
 ALLOWED_WEATHER = {"wttr.in": {"https"}}                                   # 免费天气（无 key）
 
@@ -47,34 +46,13 @@ def http_json(url, allowed, data=None, headers=None, timeout=90):
 
 
 def llm(prompt, temperature=0.8):
-    """优先智谱免费；失败则 DeepSeek flash（无 thinking）兜底。"""
-    attempts = [
-        ("Zhipu", "https://open.bigmodel.cn/api/paas/v4/chat/completions", ALLOWED_LLM, "glm-5.3-flash", None),
-        ("DeepSeek", "https://api.deepseek.com/chat/completions", ALLOWED_DS, "deepseek-flash", {"thinking": {"type": "disabled"}}),
-    ]
-    last_err = None
-    for provider, url, allowed, model, extra in attempts:
-        body_obj = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": temperature,
-        }
-        if extra:
-            body_obj.update(extra)
-        body = json.dumps(body_obj).encode("utf-8")
-        try:
-            res = http_json(url, allowed, data=body, headers={
-                "Content-Type": "application/json",
-                "Authorization": "Bearer " + botcommon.load_provider_key(provider),
-            }, timeout=120)
-            text = res["choices"][0]["message"]["content"].strip()
-            if provider != "Zhipu":
-                print("llm 兜底通道:", provider, model)
-            return text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        except Exception as e:
-            last_err = e
-            print("llm 失败", provider + ":", str(e)[:100])
-    raise RuntimeError("llm 全通道失败: " + str(last_err)[:120])
+    """免费池级联（Z.AI→智谱4-flash→商汤）；allow_paid=False，绝不烧 DeepSeek。"""
+    text, provider, model = botcommon.llm_free_chat(
+        prompt, temperature=temperature, timeout=120, allow_paid=False
+    )
+    print("llm 通道:", provider, model)
+    return text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+
 
 
 def persona_digest():
