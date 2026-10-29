@@ -100,3 +100,21 @@ py verify_botcommon.py        # 公共库单测（白名单拒绝/原子写/key 
 ```
 
 涉及守护/自愈逻辑的改动：先在纸上推演状态机（down_since / last_start / 冷却 / 超时重拉四态），确认每条转移都有出口，再动代码。
+
+## 运维教训：Planner 必须会 tool call（2026-10-30）
+
+降本把主池换成免费 `zai-flash` / 智谱 `glm-4-flash*` 后，**消息能进、Planner 也跑完，但从不回复**。
+
+根因证据：
+
+- 私聊进入 Planner → `Planner 已结束本轮思考`，但 **22:22 后 replyer 日志为 0**
+- 免费 flash 在复杂 MaiBot Planner 提示下常返回**纯文本分析**（写「应使用 reply」），**不发 `tool_calls`**；HTTP 200 被当成成功，池尾 DeepSeek **不会被轮到**
+- 把 `deepseek-flash-planner` 放回 **planner 首位**后，同链路立刻出现 `[正文工具调用] 工具=reply` → Replyer → `消息发送服务` 出话
+
+约定（`model_config.toml` 在服务器、不进仓；换机重建时按此恢复）：
+
+- **planner**：首位必须是会稳定 tool call 的模型（当前 `deepseek-flash-planner`）；免费 flash 只能跟在后面作备用，不能单独扛 Planner
+- **replyer**：可免费优先（`zai-flash` → 智谱 4-flash → …），`deepseek-flash-reply` 放池尾兜底
+- 勿再「踢光 DeepSeek」且只留不会 tool call 的免费模型在 planner
+
+
