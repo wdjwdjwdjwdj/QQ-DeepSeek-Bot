@@ -31,3 +31,4 @@ my-maibot/maibot_statistics.html
 *.tmp
 .mimosa/
 .venv-tts/
+.secrets/

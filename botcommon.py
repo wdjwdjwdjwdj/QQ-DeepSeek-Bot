@@ -75,13 +75,15 @@ def http_bytes(url, allowed, timeout=60):
 ALLOWED_LLM_FREE = {
     "token.sensenova.cn": {"https"},
     "open.bigmodel.cn": {"https"},
+    "api.z.ai": {"https"},
 }
 ALLOWED_LLM_PAID = {
     "api.deepseek.com": {"https"},
 }
 
-# 免费优先级联：商汤 → 智谱；付费 DeepSeek 默认关闭（cron 勿烧鱼粮）
+# 免费优先级联：Z.AI → 商汤 → 智谱；付费 DeepSeek 默认关闭（cron 勿烧鱼粮）
 FREE_LLM_CASCADE = [
+    ("ZAI", "https://api.z.ai/api/paas/v4/chat/completions", "glm-4.7-flash", {"thinking": {"type": "disabled"}}),
     ("SenseNova", "https://token.sensenova.cn/v1/chat/completions", "deepseek-v4-flash", None),
     ("SenseNova", "https://token.sensenova.cn/v1/chat/completions", "deepseek-flash", None),
     ("Zhipu", "https://open.bigmodel.cn/api/paas/v4/chat/completions", "glm-5.3-flash", None),
