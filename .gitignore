@@ -11,6 +11,7 @@ my-maibot/*
 my-maibot/plugins/*
 !my-maibot/plugins/SchedulerManager
 !my-maibot/plugins/FriendLedger
+!my-maibot/plugins/VoiceSpeak
 onebot-qzone/node_modules/
 onebot-qzone/test_cache/
 
@@ -29,3 +30,4 @@ WAITING_QR_SCAN.flag
 my-maibot/maibot_statistics.html
 *.tmp
 .mimosa/
+.venv-tts/

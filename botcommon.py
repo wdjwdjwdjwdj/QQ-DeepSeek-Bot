@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 BASE = Path(__file__).resolve().parent
 MODEL_CONFIG = BASE / "my-maibot" / "config" / "model_config.toml"
 NAPCAT_API = "http://127.0.0.1:3002/send_private_msg"
+NAPCAT_GROUP_API = "http://127.0.0.1:3002/send_group_msg"
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -81,4 +82,30 @@ def napcat_send_private(user_id, text):
     )
     if res.get("status") != "ok":
         raise RuntimeError("NapCat 发送失败: " + json.dumps(res, ensure_ascii=False)[:200])
+    return res
+
+
+def napcat_send_record(audio_b64, user_id=None, group_id=None):
+    """通过本机 NapCat HTTP API 发语音 record 段；私聊或群聊二选一。
+
+    audio_b64: 不含 base64:// 前缀的纯 base64 字符串（mp3/wav 均可，冒烟已验 mp3）。
+    返回值 status 非 ok 时抛 RuntimeError。
+    """
+    if bool(user_id) == bool(group_id):
+        raise ValueError("napcat_send_record 需要且只能指定 user_id 或 group_id 之一")
+    msg = [{"type": "record", "data": {"file": "base64://" + audio_b64}}]
+    if group_id:
+        url = NAPCAT_GROUP_API
+        body = {"group_id": int(group_id), "message": msg}
+    else:
+        url = NAPCAT_API
+        body = {"user_id": int(user_id), "message": msg}
+    res = http_json(
+        url,
+        {"127.0.0.1": {"http"}},
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    if res.get("status") != "ok":
+        raise RuntimeError("NapCat 语音发送失败: " + json.dumps(res, ensure_ascii=False)[:200])
     return res
