@@ -38,6 +38,7 @@ LOG_FILE = BASE / "context_memory.log"
 BOT_QQ = "3879824374"
 GE_QQ = "2968874474"               # 哥：唯一告警接收人（与 token_guard 同号）
 ALLOWED_LLM = {"open.bigmodel.cn": {"https"}}
+ALLOWED_DS = {"api.deepseek.com": {"https"}}  # L0-mem: 智谱 429 走 DeepSeek
 MAX_SAMPLE_CHARS = 12000   # 给 LLM 的聊天抽样总字符预算
 PER_MSG_CHARS = 100        # 单条消息截断长度
 HALF_DAY_TOKEN_CAP = 3_000_000  # 半日 token 上限（llm_usage 全任务口径；10-25 实测活跃日半天 195~330万）
@@ -147,6 +148,7 @@ def build_sample(rows):
 
 
 def llm_summary(title, sample):
+    """智谱优先；429/失败则 DeepSeek flash 兜底。保留原归档 prompt 与节校验。"""
     prompt = (
         "你是聊天记录归档员。下面是 QQ 机器人大肥鱼「%s」经历的聊天记录抽样"
         "（[时间] 名字: 内容；[图片]/[表情包] 是媒体占位，抽稀过但时间顺序真实）。\n"
@@ -154,21 +156,36 @@ def llm_summary(title, sample):
         "### 话题与进展\n### 人物与互动\n### 约定与未完事项\n"
         "（第三节没有可写的内容就只写「（无）」；只依据记录，不编造。）\n\n聊天抽样：\n%s"
     ) % (title, sample)
-    body = json.dumps({
-        "model": "glm-5.3-flash",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3,
-    }).encode("utf-8")
-    res = botcommon.http_json("https://open.bigmodel.cn/api/paas/v4/chat/completions", ALLOWED_LLM,
-                              data=body, headers={
-                                  "Content-Type": "application/json",
-                                  "Authorization": "Bearer " + botcommon.load_provider_key("Zhipu"),
-                              }, timeout=180)  # glm 免费池实测可达 2 分钟+（llm_usage 有 57~155s 记录），足额等待
-    text = res["choices"][0]["message"]["content"].strip()
-    text = text.removeprefix("```markdown").removeprefix("```").removesuffix("```").strip()
-    if "话题与进展" not in text:
-        raise ValueError("LLM 输出缺标准节: " + text[:120])
-    return text
+    attempts = [
+        ("Zhipu", "https://open.bigmodel.cn/api/paas/v4/chat/completions", ALLOWED_LLM, "glm-5.3-flash", None),
+        ("DeepSeek", "https://api.deepseek.com/chat/completions", ALLOWED_DS, "deepseek-flash", {"thinking": {"type": "disabled"}}),
+    ]
+    last_err = None
+    for provider, url, allowed, model, extra in attempts:
+        body_obj = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3,
+        }
+        if extra:
+            body_obj.update(extra)
+        body = json.dumps(body_obj).encode("utf-8")
+        try:
+            res = botcommon.http_json(url, allowed, data=body, headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + botcommon.load_provider_key(provider),
+            }, timeout=180)
+            text = res["choices"][0]["message"]["content"].strip()
+            text = text.removeprefix("```markdown").removeprefix("```").removesuffix("```").strip()
+            if "话题与进展" not in text:
+                raise ValueError("LLM 输出缺标准节: " + text[:120])
+            if provider != "Zhipu":
+                log("llm 兜底通道: %s %s" % (provider, model))
+            return text
+        except Exception as e:
+            last_err = e
+            log("llm 失败 %s: %s" % (provider, str(e)[:120]))
+    raise RuntimeError("llm_summary 全通道失败: " + str(last_err)[:120])
 
 
 def write_section(date_key, title, section):
@@ -191,9 +208,37 @@ def write_section(date_key, title, section):
     return path
 
 
+def parse_window_arg():
+    """支持 --window 2026-10-28-PM 补跑漏窗；无参则走 half_window()。"""
+    if "--window" not in sys.argv:
+        return None
+    i = sys.argv.index("--window")
+    if i + 1 >= len(sys.argv):
+        raise SystemExit("用法: --window YYYY-MM-DD-AM|PM")
+    key = sys.argv[i + 1].strip().upper()
+    m = re.match(r"^(\d{4}-\d{2}-\d{2})-(AM|PM)$", key)
+    if not m:
+        raise SystemExit("窗口格式错误: " + key)
+    date_key, half = m.group(1), m.group(2)
+    day = datetime.strptime(date_key, "%Y-%m-%d")
+    if half == "AM":
+        start = day.replace(hour=0, minute=0, second=0)
+        end = day.replace(hour=12, minute=0, second=0)
+        title = "上午（00:00 ~ 12:00）"
+    else:
+        start = day.replace(hour=12, minute=0, second=0)
+        end = day.replace(hour=0, minute=0, second=0) + __import__("datetime").timedelta(days=1)
+        title = "下午（12:00 ~ 24:00）"
+    return date_key, half, title, start, end
+
+
 def main():
     dry = "--dry-run" in sys.argv
-    date_key, half, title, start, end = half_window()
+    override = parse_window_arg()
+    if override:
+        date_key, half, title, start, end = override
+    else:
+        date_key, half, title, start, end = half_window()
     idem_key = "%s-%s" % (date_key, half)
     rows = fetch_rows(start, end)
     total, pictures, emojis, scope, top = build_stats(rows)

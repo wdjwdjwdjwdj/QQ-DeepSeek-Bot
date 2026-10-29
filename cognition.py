@@ -30,6 +30,7 @@ PAD_HALF_LIFE = 4 * 3600          # 情绪半衰期 4 小时（向中性衰减�
 MOOD_PROMPT_TAG = "【认知引擎v1】"  # 注入段标记（首尾一致，整段替换）
 
 ALLOWED = {"open.bigmodel.cn": {"https"}, "127.0.0.1": {"http"}}
+ALLOWED_DS = {"api.deepseek.com": {"https"}}  # L0-mem
 JUDGE_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 
 
@@ -38,17 +39,35 @@ def http_json(url, data=None, headers=None, timeout=60):
 
 
 def llm(prompt, temperature=0.3):
-    body = json.dumps({
-        "model": "glm-5.3-flash",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": temperature,
-    }).encode("utf-8")
-    res = http_json(JUDGE_URL, data=body, headers={
-        "Content-Type": "application/json", "Authorization": "Bearer " + botcommon.load_provider_key("Zhipu"),
-    })
-    text = res["choices"][0]["message"]["content"].strip()
-    text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    return text
+    """智谱优先；失败走 DeepSeek flash。"""
+    attempts = [
+        ("Zhipu", JUDGE_URL, ALLOWED, "glm-5.3-flash", None),
+        ("DeepSeek", "https://api.deepseek.com/chat/completions", ALLOWED_DS, "deepseek-flash", {"thinking": {"type": "disabled"}}),
+    ]
+    last_err = None
+    for provider, url, allowed, model, extra in attempts:
+        body_obj = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+        }
+        if extra:
+            body_obj.update(extra)
+        body = json.dumps(body_obj).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + botcommon.load_provider_key(provider),
+        }
+        try:
+            res = botcommon.http_json(url, allowed if provider != "Zhipu" else ALLOWED, data=body, headers=headers, timeout=90)
+            text = res["choices"][0]["message"]["content"].strip()
+            if provider != "Zhipu":
+                print("llm 兜底通道:", provider, model)
+            return text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        except Exception as e:
+            last_err = e
+            print("llm 失败", provider + ":", str(e)[:100])
+    raise RuntimeError("cognition llm 全通道失败: " + str(last_err)[:120])
 
 
 def load_state():
