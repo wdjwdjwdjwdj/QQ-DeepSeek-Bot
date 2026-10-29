@@ -7,7 +7,7 @@
 用法：
   python3 voice_tts.py --text "你好" --user-id 2968874474
   python3 voice_tts.py --text "群测" --group-id 123456 --dry-run
-音色：默认晓伊 + 提速提调，更接近「可爱」听感；真肥鱼 CosyVoice 另接 FEIYU_TTS_URL。
+音色：默认晓晓略慢轻抬（Warm，更人味）；edge-tts 免费。可选 FEIYU_TTS_URL 接本机 CosyVoice（零云成本但占本机电/带宽）。
 """
 from __future__ import annotations
 
@@ -23,9 +23,9 @@ from botcommon import napcat_send_record
 
 BASE = Path(__file__).resolve().parent
 EDGE_TTS = BASE / ".venv-tts" / "bin" / "edge-tts"
-DEFAULT_VOICE = "zh-CN-XiaoyiNeural"
-DEFAULT_RATE = os.environ.get("MAIBOT_TTS_RATE", "+8%")
-DEFAULT_PITCH = os.environ.get("MAIBOT_TTS_PITCH", "+40Hz")
+DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
+DEFAULT_RATE = os.environ.get("MAIBOT_TTS_RATE", "-5%")
+DEFAULT_PITCH = os.environ.get("MAIBOT_TTS_PITCH", "+8Hz")
 FEIYU_TTS_URL = os.environ.get("FEIYU_TTS_URL", "").rstrip("/")
 FEIYU_TTS_KEY = os.environ.get("FEIYU_TTS_KEY", "")
 FEIYU_STYLE = os.environ.get("FEIYU_TTS_STYLE", "cute")
@@ -34,6 +34,7 @@ FEIYU_STYLE = os.environ.get("FEIYU_TTS_STYLE", "cute")
 def _synthesize_feiyu(text: str) -> bytes:
     """调用本机/隧道上的肥鱼声音服务（CosyVoice3 cute/gentle）。"""
     import json
+    import time
     import urllib.error
     import urllib.request
 
@@ -43,7 +44,6 @@ def _synthesize_feiyu(text: str) -> bytes:
         {"text": text, "voice": "feiyu", "style": FEIYU_STYLE},
         ensure_ascii=False,
     ).encode("utf-8")
-    # 异步任务协议：POST /v1/speech → poll → download；同步兜底 POST /v1/tts
     headers = {"Content-Type": "application/json"}
     if FEIYU_TTS_KEY:
         headers["Authorization"] = "Bearer " + FEIYU_TTS_KEY
@@ -55,14 +55,11 @@ def _synthesize_feiyu(text: str) -> bytes:
         with urllib.request.urlopen(r, timeout=120) as resp:
             return resp.read()
 
-    # 优先异步 speech 任务
     try:
-        row = json.loads(_req("POST", "/v1/jobs/speech", payload).decode())
+        row = json.loads(_req("POST", "/v1/speech", payload).decode())
         job_id = row.get("id") or row.get("job_id")
         if not job_id:
             raise RuntimeError("肥鱼服务未返回 job id: " + str(row)[:200])
-        import time
-
         for _ in range(60):
             st = json.loads(_req("GET", f"/v1/jobs/{job_id}").decode())
             status = (st.get("status") or st.get("state") or "").lower()
@@ -78,7 +75,6 @@ def _synthesize_feiyu(text: str) -> bytes:
     except urllib.error.HTTPError as e:
         if e.code not in (404, 405):
             raise RuntimeError(f"肥鱼服务 HTTP {e.code}: {e.read()[:200]!r}") from e
-    # 同步兜底
     audio = _req("POST", "/v1/tts", payload)
     if not audio:
         raise RuntimeError("肥鱼同步 TTS 产出空")
@@ -98,14 +94,12 @@ def synthesize_mp3(text: str, voice: str = DEFAULT_VOICE) -> bytes:
         raise RuntimeError("未找到 edge-tts：请先建 /root/maibot/.venv-tts 并 pip install edge-tts")
     with tempfile.TemporaryDirectory(prefix="maibot-tts-") as td:
         out = Path(td) / "out.mp3"
+        # rate/pitch 必须写成 --rate=-5% 这种形式，否则 argparse 会把 -5% 当新选项
         cmd = [
             str(EDGE_TTS),
-            "--voice",
-            voice,
-            "--rate",
-            DEFAULT_RATE,
-            "--pitch",
-            DEFAULT_PITCH,
+            "--voice=" + voice,
+            "--rate=" + DEFAULT_RATE,
+            "--pitch=" + DEFAULT_PITCH,
             "--text",
             text,
             "--write-media",
