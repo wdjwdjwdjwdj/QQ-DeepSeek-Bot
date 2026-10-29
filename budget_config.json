@@ -1,0 +1,17 @@
+{
+  "enabled": true,
+  "daily_cny": 1.0,
+  "keep_planner_paid": true,
+  "gated_tasks": [
+    "replyer",
+    "utils",
+    "fast_model"
+  ],
+  "paid_models": [
+    "deepseek-flash-reply",
+    "deepseek-flash"
+  ],
+  "notify": true,
+  "restart_on_change": true,
+  "cron_note": "token_guard every 10min; strip paid from gated_tasks when over daily_cny; keep planner DeepSeek"
+}

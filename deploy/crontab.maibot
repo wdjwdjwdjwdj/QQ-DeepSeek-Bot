@@ -16,8 +16,8 @@ MAILTO=""
 # 每10分钟：认知引擎（情绪/意图/矛盾/技能卡 + prompt 注入）
 */10 * * * * cd /root/maibot && /usr/bin/python3 cognition.py >> logs/cron_cognition.log 2>&1
 
-# 每30分钟：DeepSeek 余额守护（<2元私聊求救，4h冷却）
-*/30 * * * * cd /root/maibot && /usr/bin/python3 token_guard.py >> logs/cron_token_guard.log 2>&1
+# 每10分钟：DeepSeek 余额守护 + 付费日预算门控（<2元求救；超 daily_cny 踢主聊付费）
+*/10 * * * * cd /root/maibot && /usr/bin/python3 token_guard.py >> logs/cron_token_guard.log 2>&1
 
 # 每30分钟：随机主动找姐聊天（概率门控+冷却+日上限）
 */30 * * * * cd /root/maibot && /usr/bin/python3 sister_chat.py >> logs/cron_sister_chat.log 2>&1

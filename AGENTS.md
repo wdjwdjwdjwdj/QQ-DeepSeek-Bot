@@ -37,7 +37,7 @@ QQ ⇄ NapCat-OneKey（:3001 正向WS / :3002 HTTP API）
 Windows 计划任务（每分钟级短进程，无长驻）：
   MaiBotWatchdog        PT2M   watchdog.py         全链路守护自愈（WAITING_QR_SCAN.flag 存在=等人工扫码，自动暂停 NapCat 拉起，扫码恢复自动清除）
   MaiBotCognition       PT10M  cognition.py        情绪/意图/矛盾/技能卡 + prompt 注入
-  MaiBotTokenGuard      PT30M  token_guard.py      DeepSeek 余额求救
+  MaiBotTokenGuard      PT10M  token_guard.py      DeepSeek 余额求救 + 付费日预算门控（budget_config.json）
   MaiBotScheduledSender PT1M   scheduled_sender.py 读 schedule_config.json 发定时消息
   MaiBotWelcomeSender   PT2M   welcome_bot.py      新人入群欢迎：轮询群名单diff→智谱现写大肥鱼口吻欢迎语@新人(LLM挂回退随机池,首见群只记基线,--dry-run只打印不发)
   MaiBotPersonaAudit    每日03:00 persona_audit.py 人设漂移审查
@@ -99,6 +99,8 @@ py verify_scheduler.py        # SchedulerManager 回归（含权限/校验/闭�
 py verify_botcommon.py        # 公共库单测（白名单拒绝/原子写/key 读取，不联网不发消息）
 py verify_planner_pool.py     # planner 首位必须在 TOOL_CAPABLE_PLANNER_HEADS（改 model_config / 降本必跑）
 py verify_planner_pool.py --live  # 可选：对 planner[0] 真发 tools 冒烟（出网）
+py verify_budget_gate.py       # 日预算门控纯函数 + toml rewrite
+py verify_budget_gate.py --dry-run  # 对照生产 model_config 预览踢/恢复（不写盘）
 ```
 
 涉及守护/自愈逻辑的改动：先在纸上推演状态机（down_since / last_start / 冷却 / 超时重拉四态），确认每条转移都有出口，再动代码。
@@ -121,4 +123,15 @@ py verify_planner_pool.py --live  # 可选：对 planner[0] 真发 tools 冒烟�
 - **可执行闸门**：`python3 verify_planner_pool.py`（白名单 `TOOL_CAPABLE_PLANNER_HEADS`）；`night_watch` 每轮静态检查，失败=CRITICAL
 - **2026-10-30 冒烟**：硬提示下 `deepseek-flash-planner` PASS；`zp-4flash-b` FAIL（把 tool JSON 当正文）；`zai-flash`/`zp-4flash` 简单硬提示偶发 PASS，**不足以**升 planner 首位——须生产私聊实测后再扩白名单
 
+
+## 运维教训：付费日预算硬顶（2026-10-30）
+
+主聊 DeepSeek 兜底会在免费池 429/熔断后把日耗打穿。方向2：
+
+- 配置：根目录 `budget_config.json`（可进仓，无密钥），默认 `daily_cny=1.0`
+- 执行：`token_guard.py` 每 10 分钟查余额轨迹；`今日消耗 = 当日首点余额 − 当前余额`
+- 超预算：从 `replyer` / `utils` / `fast_model` 踢掉 `deepseek-flash-reply`（及 `deepseek-flash`），**不碰 planner**（保留 `deepseek-flash-planner` 防哑火）
+- 未超/新日：自动把付费回复模型加回池尾；锁态翻转时私聊通知哥哥
+- `botcommon.llm_free_chat(allow_paid=True)` 在锁态下也会忽略付费级联
+- 改预算：只改 `budget_config.json` 的 `daily_cny` / `enabled`；改完下轮 cron 生效，或手动 `python3 token_guard.py --budget-only`
 

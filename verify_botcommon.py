@@ -86,8 +86,10 @@ def test_load_key():
 
 def test_token_guard_regression():
     print("[5] token_guard 回归：警报分支不得丢 daily_log")
+    import time as _time
+    today = _time.strftime("%Y-%m-%d")
     st = {"alerting": False, "last_remind": 0,
-          "daily_log": [{"day": "2026-10-25", "t": 1.0, "bal": 9.67}]}
+          "daily_log": [{"day": today, "t": 1.0, "bal": 9.67}]}
     st, first = token_guard.record_balance(st, 8.5)
     check("轨迹追加且保留旧点", len(st["daily_log"]) == 2 and st["daily_log"][0]["bal"] == 9.67, str(st["daily_log"]))
     check("返回今日首点余额", first == 9.67, str(first))

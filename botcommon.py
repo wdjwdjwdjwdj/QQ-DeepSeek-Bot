@@ -102,7 +102,10 @@ def llm_free_chat(prompt, temperature=0.3, timeout=90, allow_paid=False, max_tok
     """
     attempts = list(FREE_LLM_CASCADE)
     if allow_paid:
-        attempts.extend(PAID_LLM_CASCADE)
+        if is_paid_budget_locked():
+            print("llm_free_chat: 日预算已锁，忽略 allow_paid")
+        else:
+            attempts.extend(PAID_LLM_CASCADE)
     last_err = None
     for provider, url, model, extra in attempts:
         body_obj = {
@@ -137,6 +140,87 @@ def llm_free_chat(prompt, temperature=0.3, timeout=90, allow_paid=False, max_tok
             last_err = e
             print("llm_free_chat 失败 %s/%s: %s" % (provider, model, str(e)[:120]))
     raise RuntimeError("llm_free_chat 全通道失败: " + str(last_err)[:160])
+
+
+
+BUDGET_CONFIG = BASE / "budget_config.json"
+TOKEN_GUARD_STATE = BASE / "my-maibot" / "data" / "token_guard_state.json"
+
+# 默认：日预算 ¥1；超预算后主聊/工具池踢付费，planner 仍可 DeepSeek（tool_call）
+_DEFAULT_BUDGET = {
+    "enabled": True,
+    "daily_cny": 1.0,
+    "keep_planner_paid": True,
+    "gated_tasks": ["replyer", "utils", "fast_model"],
+    "paid_models": ["deepseek-flash-reply", "deepseek-flash"],
+    "notify": True,
+    "restart_on_change": True,
+}
+
+
+def load_budget_config():
+    """读根目录 budget_config.json；缺文件/坏 JSON 用默认。不含密钥。"""
+    cfg = dict(_DEFAULT_BUDGET)
+    if BUDGET_CONFIG.is_file():
+        try:
+            raw = json.loads(BUDGET_CONFIG.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                cfg.update(raw)
+        except Exception as e:
+            print("load_budget_config 失败，用默认:", e)
+    cfg["daily_cny"] = float(cfg.get("daily_cny", 1.0))
+    cfg["gated_tasks"] = list(cfg.get("gated_tasks") or _DEFAULT_BUDGET["gated_tasks"])
+    cfg["paid_models"] = list(cfg.get("paid_models") or _DEFAULT_BUDGET["paid_models"])
+    return cfg
+
+
+def today_deepseek_spend(daily_log, current_balance=None):
+    """当日 DeepSeek 消耗（元）= 当天首点余额 − 当前余额；负值（充值）按 0。
+
+    返回 (spend, first_bal_or_None)。daily_log 形如 token_guard 的 [{day,t,bal},...]。
+    """
+    import time as _time
+    today = _time.strftime("%Y-%m-%d")
+    pts = [e for e in (daily_log or []) if e.get("day") == today]
+    if not pts:
+        return 0.0, None
+    first = float(pts[0]["bal"])
+    last = float(current_balance) if current_balance is not None else float(pts[-1]["bal"])
+    return max(0.0, first - last), first
+
+
+def is_paid_budget_locked(daily_log=None, current_balance=None, cfg=None):
+    """超日预算则 True。enabled=False 永远 False。"""
+    cfg = cfg or load_budget_config()
+    if not cfg.get("enabled", True):
+        return False
+    if daily_log is None:
+        if TOKEN_GUARD_STATE.is_file():
+            try:
+                daily_log = json.loads(
+                    TOKEN_GUARD_STATE.read_text(encoding="utf-8")
+                ).get("daily_log", [])
+            except Exception:
+                daily_log = []
+        else:
+            daily_log = []
+    spend, _ = today_deepseek_spend(daily_log, current_balance)
+    return spend >= float(cfg["daily_cny"])
+
+
+def strip_paid_from_list(model_list, paid_models):
+    paid = set(paid_models)
+    return [m for m in model_list if m not in paid]
+
+
+def restore_paid_into_list(model_list, paid_to_add, paid_models):
+    """在列表上恢复付费模型：sn-vlm 等视觉模型仍置尾。"""
+    paid = set(paid_models)
+    base = [m for m in model_list if m not in paid]
+    trail_vlm = [m for m in base if "vlm" in m.lower() or m.endswith("-vlm")]
+    head = [m for m in base if m not in trail_vlm]
+    add = [m for m in paid_to_add if m in paid and m not in head]
+    return head + add + trail_vlm
 
 
 def napcat_send_private(user_id, text):
