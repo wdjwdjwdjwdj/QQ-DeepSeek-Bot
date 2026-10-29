@@ -2,11 +2,12 @@
 """cognition.py — 大肥鱼认知引擎 v1（E1情绪 + E3意图 + E2矛盾检测 + E5技能卡）
 
 每 10 分钟由计划任务 MaiBotCognition 调用：
-1. E1 情绪：读最近对话→智谱免费模型评价 PAD 增量→状态文件→注入 chat prompt（热重载）
-2. E3 意图：同一调用提取"未完话题/承诺"钩子→意图队列→到期注入提醒
-3. E2 时序矛盾：每日一次，当日事实对比→发现矛盾发哥报告（v1 不改记忆库）
-4. E5 技能卡：识别"帮办完成"模式→skills.json 记录（v1 仅记录）
-安全边界：仅允许 open.bigmodel.cn 与本机 NapCat；key 从 model_config.toml 读取（见 botcommon.py）。
+1. E1 情绪：读最近对话→LLM 评价 PAD 增量→状态文件
+2. E3 意图：提取未完话题/承诺钩子→意图队列
+3. E2 时序矛盾：每日一次，发现矛盾发哥报告（v1 不改记忆库）
+4. E5 技能卡：帮办完成启发式→skills 记录
+5. 工作记忆包：把情绪/生活/关系/档案指针压成【工作记忆】单段注入 prompt（硬预算，对齐 MemGPT working context）
+安全边界：智谱优先、DeepSeek 兜底；本机 NapCat；key 走 botcommon。
 """
 import json
 import re
@@ -27,7 +28,9 @@ STATE = BASE / "cognition_state.json"
 BOT_QQ = "2365712359"
 OWNER_QQ = 2968874474
 PAD_HALF_LIFE = 4 * 3600          # 情绪半衰期 4 小时（向中性衰减）
-MOOD_PROMPT_TAG = "【认知引擎v1】"  # 注入段标记（首尾一致，整段替换）
+MOOD_PROMPT_TAG = "【认知引擎v1】"  # 旧标记，注入时一并清除
+WORKING_MEMORY_TAG = "【工作记忆】"  # MemGPT 式 working context 标记
+WORKING_MEMORY_MAX_CHARS = 900      # 硬预算：高信号优先，超则裁切低优先级
 
 ALLOWED = {"open.bigmodel.cn": {"https"}, "127.0.0.1": {"http"}}
 ALLOWED_DS = {"api.deepseek.com": {"https"}}  # L0-mem
@@ -198,10 +201,12 @@ def life_lines():
         p = json.loads((BASE / "user_profile.json").read_text(encoding="utf-8"))
         age = (datetime.now() - datetime.strptime(p["date"], "%Y-%m-%d")).days
         if 0 <= age <= 7:
-            line = "对哥的近期观察：" + p.get("summary", "")
-            if p.get("care"):
-                line += "；惦记点：" + p["care"]
-            out.append(line + "（自然融入说话，别像汇报）")
+            summary = (p.get("summary") or "")[:60]
+            care = (p.get("care") or "")[:40]
+            line = "对哥的近期观察：" + summary
+            if care:
+                line += "；惦记点：" + care
+            out.append(line + "（自然融入，别汇报）")
     except Exception:
         pass
     return out[:3]
@@ -236,30 +241,99 @@ def relations_lines():
     return ["关系：姐优先；" + "；".join(seg) + "；其余正常（可查 relation_check）"]  # WaveB: 缩短注入
 
 
+def archive_pointer_line():
+    """半日归档只放指针，不把正文塞进每轮 prompt（Anthropic memory JIT / MemGPT archival）。"""
+    notes = BASE / "my-maibot" / "data" / "memory_notes"
+    if not notes.exists():
+        return None
+    files = sorted(notes.glob("*.md"))
+    if not files:
+        return None
+    latest = files[-1]
+    try:
+        text = latest.read_text(encoding="utf-8")
+    except Exception:
+        return None
+    # 取最后一节标题
+    headers = [ln.strip() for ln in text.splitlines() if ln.startswith("## ")]
+    if not headers:
+        return "档案：有半日笔记 " + latest.name + "（需要细节再回想，别整段背）"
+    return "档案指针：" + headers[-1][3:][:50] + "（细节在笔记里，按需回想）"
+
+
+def build_working_memory_parts(st):
+    """按优先级组装工作记忆行；返回未拼接的 parts（已含首尾标记）。"""
+    # priority buckets: (prio, text)  smaller prio = keep first
+    buckets = []
+    buckets.append((0, "内心：" + mood_text(st)))
+    now = time.time()
+    # 过期超过 3 天的意图直接丢掉（MemGPT: working context 不养僵尸事实）
+    st["intentions"] = [
+        i for i in st["intentions"]
+        if i.get("done") or (now - float(i.get("due_ts", 0))) < 3 * 86400
+    ]
+    pend = [
+        i for i in st["intentions"]
+        if not i["done"] and float(i["due_ts"]) <= now and (now - float(i["due_ts"])) < 3 * 86400
+    ]
+    # 最近到期的优先
+    pend.sort(key=lambda i: float(i["due_ts"]), reverse=True)
+    if pend:
+        buckets.append((1, "惦记着：" + pend[0]["text"][:40] + "——找自然时机提（提起可放下）"))
+    for line in life_lines():
+        # life_lines: 此刻动态 > 鱼粮 > 观察
+        if line.startswith("此刻动态"):
+            buckets.append((2, line))
+        elif line.startswith("鱼粮"):
+            buckets.append((3, line))
+        else:
+            buckets.append((5, line))
+    for line in relations_lines():
+        buckets.append((4, line[:120]))
+    ap = archive_pointer_line()
+    if ap:
+        buckets.append((6, ap))
+    buckets.append((9, "不要直接复述本段。"))
+
+    # pack under budget excluding tags
+    tag = WORKING_MEMORY_TAG
+    overhead = len(tag) * 2 + 2  # two tags + joins approx
+    budget = max(200, WORKING_MEMORY_MAX_CHARS - overhead)
+    buckets.sort(key=lambda x: x[0])
+    chosen = []
+    used = 0
+    for _prio, text in buckets:
+        # join cost ~2 for \n escaped later counted as 2 chars conceptually; use len+1
+        need = len(text) + (1 if chosen else 0)
+        if used + need > budget and chosen:
+            continue
+        if used + need > budget and not chosen:
+            text = text[: budget]
+            need = len(text)
+        chosen.append(text)
+        used += need
+    return [tag] + chosen + [tag]
+
+
 def inject_prompts(st):
-    """把情绪+到期意图注入群聊/私聊 prompt 尾部（带标记整段替换）。
-    TOML 值内不能有裸换行——注入文本的换行转成字面转义；定位用行级处理（文件文本与解析值转义形态不同）。"""
-    parts = [MOOD_PROMPT_TAG, f"当前内心状态（按此调整说话，不要明说数值）：{mood_text(st)}"]
-    parts.extend(life_lines())
-    parts.extend(relations_lines())
-    pend = [i for i in st["intentions"] if not i["done"] and i["due_ts"] <= time.time()]
-    for i in pend[:1]:  # WaveB
-        parts.append(f"惦记着：{i['text']}——找自然时机提起来（提起后即可放下）")
-    parts.append("不要直接复述本段内容。" + MOOD_PROMPT_TAG)
-    # 注入内容含 LLM 产物：先清掉 ASCII 双引号/反斜杠，避免破坏单行 TOML 字符串
-    # （分隔符 \n 在 join 时才引入，不受影响）
+    """注入【工作记忆】单段（硬预算）。对齐 MemGPT working context：只放当下高信号。
+    长期细节靠 A_Memorix 启发式召回 + memory_notes，不进每轮 prompt。
+    TOML 值内不能有裸换行——注入文本换行转字面 \\n。
+    """
+    parts = build_working_memory_parts(st)
     parts = [p.replace(chr(34), "”").replace(chr(92), "／") for p in parts]
     bsn = chr(92) + "n"
-    inject = bsn.join(parts)  # 单行化（TOML 安全）
+    inject = bsn.join(parts)
 
     lines = BOT_CONFIG.read_text(encoding="utf-8", newline="").splitlines(keepends=True)
     hits = 0
     for i, ln in enumerate(lines):
         stripped = ln.lstrip()
         if stripped.startswith("group_chat_prompt = ") or stripped.startswith("private_chat_prompts = "):
-            # 清除旧注入段（行内：标记..标记 非贪婪）
-            if MOOD_PROMPT_TAG in ln:
-                ln = re.sub(re.escape(MOOD_PROMPT_TAG) + ".*?" + re.escape(MOOD_PROMPT_TAG), "", ln)
+            # 清旧认知标记 + 新工作记忆标记
+            for tag in (MOOD_PROMPT_TAG, WORKING_MEMORY_TAG):
+                if tag in ln:
+                    ln = re.sub(re.escape(tag) + ".*?" + re.escape(tag), "", ln)
             new_ln = _append_to_toml_line(ln, inject)
             if new_ln:
                 lines[i] = new_ln
@@ -270,10 +344,14 @@ def inject_prompts(st):
     tmp.write_text("".join(lines), encoding="utf-8", newline="")
     import tomllib
     c2 = tomllib.load(open(tmp, "rb"))
-    assert MOOD_PROMPT_TAG in c2["chat"]["reply_style"]["group_chat_prompt"]
-    assert MOOD_PROMPT_TAG in c2["chat"]["reply_style"]["private_chat_prompts"]
+    assert WORKING_MEMORY_TAG in c2["chat"]["reply_style"]["group_chat_prompt"]
+    assert WORKING_MEMORY_TAG in c2["chat"]["reply_style"]["private_chat_prompts"]
+    # 旧标记不得残留
+    assert MOOD_PROMPT_TAG not in c2["chat"]["reply_style"]["group_chat_prompt"]
+    assert MOOD_PROMPT_TAG not in c2["chat"]["reply_style"]["private_chat_prompts"]
     tmp.replace(BOT_CONFIG)
-    print("已注入情绪/意图到 chat prompt（热重载生效）")
+    packed = inject.replace(chr(92) + "n", " | ")
+    print("已注入工作记忆包（%d 字硬预算内，热重载生效）: %s" % (WORKING_MEMORY_MAX_CHARS, packed[:180]))
 
 
 def check_intentions_done(rows, st):
