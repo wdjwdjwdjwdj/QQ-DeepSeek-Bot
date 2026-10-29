@@ -71,6 +71,67 @@ def http_bytes(url, allowed, timeout=60):
         return r.read()
 
 
+
+ALLOWED_LLM_FREE = {
+    "token.sensenova.cn": {"https"},
+    "open.bigmodel.cn": {"https"},
+}
+ALLOWED_LLM_PAID = {
+    "api.deepseek.com": {"https"},
+}
+
+# 免费优先级联：商汤 → 智谱；付费 DeepSeek 默认关闭（cron 勿烧鱼粮）
+FREE_LLM_CASCADE = [
+    ("SenseNova", "https://token.sensenova.cn/v1/chat/completions", "deepseek-v4-flash", None),
+    ("SenseNova", "https://token.sensenova.cn/v1/chat/completions", "deepseek-flash", None),
+    ("Zhipu", "https://open.bigmodel.cn/api/paas/v4/chat/completions", "glm-5.3-flash", None),
+]
+PAID_LLM_CASCADE = [
+    ("DeepSeek", "https://api.deepseek.com/chat/completions", "deepseek-flash", {"thinking": {"type": "disabled"}}),
+]
+
+
+def llm_free_chat(prompt, temperature=0.3, timeout=90, allow_paid=False, max_tokens=None):
+    """免费优先 chat completions。默认 allow_paid=False，全免费失败则抛错不烧 DeepSeek。
+
+    返回 (text, provider, model)。调用方按需解析 JSON / 校验格式。
+    """
+    attempts = list(FREE_LLM_CASCADE)
+    if allow_paid:
+        attempts.extend(PAID_LLM_CASCADE)
+    last_err = None
+    for provider, url, model, extra in attempts:
+        body_obj = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+        }
+        if max_tokens is not None:
+            body_obj["max_tokens"] = max_tokens
+        if extra:
+            body_obj.update(extra)
+        allowed = dict(ALLOWED_LLM_FREE)
+        if provider == "DeepSeek":
+            allowed = dict(ALLOWED_LLM_PAID)
+        try:
+            res = http_json(
+                url,
+                allowed,
+                data=json.dumps(body_obj).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": "Bearer " + load_provider_key(provider),
+                },
+                timeout=timeout,
+            )
+            text = res["choices"][0]["message"]["content"].strip()
+            return text, provider, model
+        except Exception as e:
+            last_err = e
+            print("llm_free_chat 失败 %s/%s: %s" % (provider, model, str(e)[:120]))
+    raise RuntimeError("llm_free_chat 全通道失败: " + str(last_err)[:160])
+
+
 def napcat_send_private(user_id, text):
     """通过本机 NapCat HTTP API 发私聊；返回值 status 非 ok 时抛 RuntimeError。"""
     body = json.dumps({"user_id": user_id, "message": text}).encode("utf-8")

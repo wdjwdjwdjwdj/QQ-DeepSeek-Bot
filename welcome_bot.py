@@ -12,7 +12,7 @@ LLM 失败回退内置欢迎池随机选一条。首次见到某个群只记基�
   py welcome_bot.py --dry-run   # 全流程但只打印不发消息、不落盘快照（测试用）
 
 网络边界（botcommon 白名单）：127.0.0.1(http, NapCat :3002 读群名单/发消息)
-                            / open.bigmodel.cn(https, 智谱免费写欢迎语)
+                            / 商汤+智谱免费优先写欢迎语（失败回退欢迎池，不烧 DeepSeek）
 """
 import json
 import secrets
@@ -110,25 +110,17 @@ def gen_welcome(gname, members):
     hour_tip = ""
     if now < "07:00":
         hour_tip = "这么晚/这么早进群的，可以顺势调侃一句。"
-    body = json.dumps({
-        "model": "glm-5.3-flash",
-        "messages": [{"role": "user", "content": PROMPT % (who, gname, now, hour_tip)}],
-        "temperature": 0.95,
-    }).encode("utf-8")
     try:
-        res = botcommon.http_json(
-            "https://open.bigmodel.cn/api/paas/v4/chat/completions", ALLOWED_LLM,
-            data=body, headers={
-                "Content-Type": "application/json",
-                "Authorization": "Bearer " + botcommon.load_provider_key("Zhipu"),
-            }, timeout=60,
+        text, provider, model = botcommon.llm_free_chat(
+            PROMPT % (who, gname, now, hour_tip), temperature=0.95, timeout=60, allow_paid=False
         )
-        text = res["choices"][0]["message"]["content"].strip()
         text = text.removeprefix("```").removesuffix("```").strip()
         for q in ('"', "“", "”"):
             text = text.strip(q)
         text = text.replace("\n", " ").strip()
         if text and len(text) <= 80:
+            if provider != "Zhipu":
+                log("llm 通道: %s %s" % (provider, model))
             return text
         log("LLM 输出异常，回退欢迎池: %r" % text[:60])
     except Exception as e:

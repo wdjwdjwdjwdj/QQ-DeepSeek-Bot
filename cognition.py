@@ -7,7 +7,7 @@
 3. E2 时序矛盾：每日一次，发现矛盾发哥报告（v1 不改记忆库）
 4. E5 技能卡：帮办完成启发式→skills 记录
 5. 工作记忆包：把情绪/生活/关系/档案指针压成【工作记忆】单段注入 prompt（硬预算，对齐 MemGPT working context）
-安全边界：智谱优先、DeepSeek 兜底；本机 NapCat；key 走 botcommon。
+安全边界：商汤→智谱免费优先（默认不烧 DeepSeek）；本机 NapCat；key 走 botcommon。
 """
 import json
 import re
@@ -42,35 +42,11 @@ def http_json(url, data=None, headers=None, timeout=60):
 
 
 def llm(prompt, temperature=0.3):
-    """智谱优先；失败走 DeepSeek flash。"""
-    attempts = [
-        ("Zhipu", JUDGE_URL, ALLOWED, "glm-5.3-flash", None),
-        ("DeepSeek", "https://api.deepseek.com/chat/completions", ALLOWED_DS, "deepseek-flash", {"thinking": {"type": "disabled"}}),
-    ]
-    last_err = None
-    for provider, url, allowed, model, extra in attempts:
-        body_obj = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": temperature,
-        }
-        if extra:
-            body_obj.update(extra)
-        body = json.dumps(body_obj).encode("utf-8")
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer " + botcommon.load_provider_key(provider),
-        }
-        try:
-            res = botcommon.http_json(url, allowed if provider != "Zhipu" else ALLOWED, data=body, headers=headers, timeout=90)
-            text = res["choices"][0]["message"]["content"].strip()
-            if provider != "Zhipu":
-                print("llm 兜底通道:", provider, model)
-            return text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        except Exception as e:
-            last_err = e
-            print("llm 失败", provider + ":", str(e)[:100])
-    raise RuntimeError("cognition llm 全通道失败: " + str(last_err)[:120])
+    """商汤→智谱免费优先；默认不烧 DeepSeek（免费池死就跳过本轮）。"""
+    text, provider, model = botcommon.llm_free_chat(prompt, temperature=temperature, timeout=90, allow_paid=False)
+    if provider != "Zhipu":
+        print("llm 通道:", provider, model)
+    return text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
 
 
 def load_state():

@@ -10,7 +10,7 @@ LLM 输出 [SKIP] 表示此刻没话说（正常，保证真实性）。姐=仿�
 用法：
   py sister_chat.py            # 常规轮询：概率门控 + 冷却90分钟 + 日上限6条
   py sister_chat.py --force    # 跳过所有门控直接生成并发送（测试用，会真发给姐）
-网络边界（botcommon 白名单）：127.0.0.1(http, NapCat :3002) / open.bigmodel.cn(https, 智谱免费)
+网络边界（botcommon 白名单）：127.0.0.1(http, NapCat :3002) / 商汤+智谱免费优先（默认不烧 DeepSeek）
 """
 import json
 import random
@@ -104,19 +104,13 @@ PROMPT = """你是大肥鱼，一条鲸鱼娘。下面是你此刻的世界观�
 
 
 def llm_message(context):
-    body = json.dumps({
-        "model": "glm-5.3-flash",
-        "messages": [{"role": "user", "content": PROMPT % context}],
-        "temperature": 0.9,
-    }).encode("utf-8")
-    res = botcommon.http_json("https://open.bigmodel.cn/api/paas/v4/chat/completions", ALLOWED_LLM, data=body, headers={
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + botcommon.load_provider_key("Zhipu"),
-    }, timeout=120)
-    text = res["choices"][0]["message"]["content"].strip()
+    """商汤→智谱免费优先；失败本轮跳过（不烧 DeepSeek）。"""
+    text, provider, model = botcommon.llm_free_chat(PROMPT % context, temperature=0.9, timeout=120, allow_paid=False)
     text = text.removeprefix("```").removesuffix("```").strip()
     for q in ('"', "“", "”"):
         text = text.strip(q)
+    if provider != "Zhipu":
+        log("llm 通道: %s %s" % (provider, model))
     return text[:150]
 
 

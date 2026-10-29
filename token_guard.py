@@ -49,6 +49,25 @@ def http_request(url, data=None, headers=None):
     return botcommon.http_json(url, ALLOWED_TARGETS, data=data, headers=headers, timeout=30)
 
 
+
+def probe_free_pools():
+    """只探测免费池是否可用（各最多 1 次、max_tokens=8），不调用 DeepSeek chat。"""
+    status = {}
+    try:
+        text, provider, model = botcommon.llm_free_chat(
+            "说一个字：好", temperature=0, timeout=30, allow_paid=False, max_tokens=8
+        )
+        status["ok"] = True
+        status["provider"] = provider
+        status["model"] = model
+        status["sample"] = (text or "")[:20]
+    except Exception as e:
+        status["ok"] = False
+        status["error"] = str(e)[:160]
+    print("免费池探测:", status)
+    return status
+
+
 def get_balance(key):
     data = http_request(BALANCE_URL, headers={"Authorization": "Bearer " + key})
     for info in data.get("balance_infos", []):

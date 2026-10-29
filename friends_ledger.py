@@ -11,7 +11,7 @@
   py friends_ledger.py --sync              # 同步群成员进账本（新增默认0分，不覆盖已有分数）
   py friends_ledger.py --review            # 每日复盘调分（写 friends.json + friends_review.log）
   py friends_ledger.py --review --dry-run  # 只打印拟调分，不写盘
-网络边界（botcommon 白名单）：127.0.0.1(http, NapCat :3002) / open.bigmodel.cn(https, 智谱免费)
+网络边界（botcommon 白名单）：127.0.0.1(http, NapCat :3002) / 商汤+智谱免费优先（默认不烧 DeepSeek）
 """
 import json
 import re
@@ -150,21 +150,13 @@ def build_review_prompt(gname, samples, stats, high_names, warm_names):
 
 
 def llm_json(prompt):
-    body = json.dumps({
-        "model": "glm-5.3-flash",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.6,
-    }).encode("utf-8")
-    res = botcommon.http_json("https://open.bigmodel.cn/api/paas/v4/chat/completions", ALLOWED_LLM, data=body, headers={
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + botcommon.load_provider_key("Zhipu"),
-    }, timeout=120)
-    text = res["choices"][0]["message"]["content"].strip()
+    """商汤→智谱免费优先；失败抛错由调用方跳过（不烧 DeepSeek）。"""
+    text, provider, model = botcommon.llm_free_chat(prompt, temperature=0.6, timeout=120, allow_paid=False)
     text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    m = re.search(r"\[.*\]", text, re.S)
-    if not m:
-        raise ValueError("LLM 输出里没有 JSON 数组: " + text[:120])
-    return json.loads(m.group(0))
+    if provider != "Zhipu":
+        log("llm 通道: %s %s" % (provider, model))
+    return json.loads(text)
+
 
 
 def clamp_delta(score, delta):
