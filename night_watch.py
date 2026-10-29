@@ -133,6 +133,18 @@ def main():
         checks["bot_config_valid"] = False
         problems.append(f"bot_config.toml 解析失败: {e}")
 
+    # planner 首位必须会 tool call；降本误配会导致「进消息但不回复」
+    try:
+        import verify_planner_pool as vpp
+        data = vpp._load()
+        pp_problems = vpp.check_static(data)
+        checks["planner_pool_ok"] = not pp_problems
+        for p in pp_problems:
+            problems.append(f"planner_pool: {p}")
+    except Exception as e:
+        checks["planner_pool_ok"] = False
+        problems.append(f"planner_pool check error: {e}")
+
     try:
         json.loads(SENDER_STATE.read_text(encoding="utf-8"))
         checks["sender_state_valid"] = True
@@ -144,7 +156,8 @@ def main():
         checks["preflight"] = preflight(uid) if uid else "napcat_offline"
 
     critical = (not checks["napcat_session"] or not checks["maibot_webui"]
-                or not checks["bot_config_valid"] or not checks["sender_state_valid"])
+                or not checks["bot_config_valid"] or not checks["sender_state_valid"]
+                or not checks.get("planner_pool_ok", True))
     verdict = "CRITICAL" if critical else ("WARN" if actions or problems or not checks["qzone_bridge"] else "OK")
 
     print(json.dumps({

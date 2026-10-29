@@ -97,6 +97,8 @@ ZCode 自动化（非 Windows 计划任务，迁移服务器后应删除）：
 py -m py_compile botcommon.py watchdog.py token_guard.py scheduled_sender.py cognition.py persona_audit.py  # 语法/导入
 py verify_scheduler.py        # SchedulerManager 回归（含权限/校验/闭环 18 项断言）
 py verify_botcommon.py        # 公共库单测（白名单拒绝/原子写/key 读取，不联网不发消息）
+py verify_planner_pool.py     # planner 首位必须在 TOOL_CAPABLE_PLANNER_HEADS（改 model_config / 降本必跑）
+py verify_planner_pool.py --live  # 可选：对 planner[0] 真发 tools 冒烟（出网）
 ```
 
 涉及守护/自愈逻辑的改动：先在纸上推演状态机（down_since / last_start / 冷却 / 超时重拉四态），确认每条转移都有出口，再动代码。
@@ -116,5 +118,7 @@ py verify_botcommon.py        # 公共库单测（白名单拒绝/原子写/key 
 - **planner**：首位必须是会稳定 tool call 的模型（当前 `deepseek-flash-planner`）；免费 flash 只能跟在后面作备用，不能单独扛 Planner
 - **replyer**：可免费优先（`zai-flash` → 智谱 4-flash → …），`deepseek-flash-reply` 放池尾兜底
 - 勿再「踢光 DeepSeek」且只留不会 tool call 的免费模型在 planner
+- **可执行闸门**：`python3 verify_planner_pool.py`（白名单 `TOOL_CAPABLE_PLANNER_HEADS`）；`night_watch` 每轮静态检查，失败=CRITICAL
+- **2026-10-30 冒烟**：硬提示下 `deepseek-flash-planner` PASS；`zp-4flash-b` FAIL（把 tool JSON 当正文）；`zai-flash`/`zp-4flash` 简单硬提示偶发 PASS，**不足以**升 planner 首位——须生产私聊实测后再扩白名单
 
 
