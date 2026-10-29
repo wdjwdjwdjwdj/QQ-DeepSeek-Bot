@@ -9,7 +9,7 @@ state 文件记录当天已发记录防止重复。
     py scheduled_sender.py                # 常规运行（计划任务调用）
     py scheduled_sender.py --test 早安问候  # 忽略时间表，立即发指定任务（端到端测试）
 
-配置：同目录 schedule_config.json。times 用 24 小时制 HH:MM；days 缺省每天，
+配置：同目录 schedule_config.json；任务可设 life_hook=true，优先用当日 life_state 实况（WaveB）。times 用 24 小时制 HH:MM；days 缺省每天，
 可写 [1,2,3,4,5] 表示周一到周五（0=周日）；messages 是消息池，每次随机选一条。
 网络边界：仅允许本机 NapCat 127.0.0.1:3002，禁止重定向（见 botcommon.py）。
 """
@@ -28,6 +28,37 @@ STATE_FILE = BASE / "scheduled_sender_state.json"
 
 NAPCAT_PRIVATE = "http://127.0.0.1:3002/send_private_msg"
 NAPCAT_GROUP = "http://127.0.0.1:3002/send_group_msg"
+
+
+def life_hook_message():
+    """从当日 life_state.json 拼一条短实况；失败返回 None，调用方回退消息池。"""
+    try:
+        life = json.loads((BASE / "life_state.json").read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    today = time.strftime("%Y-%m-%d")
+    if life.get("date") != today:
+        return None
+    now_hm = time.strftime("%H:%M")
+    cur = None
+    for e in life.get("events") or []:
+        if e.get("t", "00:00") <= now_hm:
+            cur = e
+    if cur is None and life.get("events"):
+        first = life["events"][0]
+        what = first.get("what", "刚醒")
+        return "刚醒呢……等下要" + what + "啦"
+    if not cur:
+        return None
+    what = (cur.get("what") or "").strip()
+    detail = (cur.get("detail") or "").strip()
+    if not what:
+        return None
+    # 口语短句，避免像日报
+    if detail:
+        return what + "，" + detail[:28]
+    return what
+
 
 
 def send_one(task, text):
@@ -117,13 +148,19 @@ def main():
                     continue
                 matched = True
 
-        msgs = task.get("messages", [])
-        if isinstance(msgs, str):
-            msgs = [msgs]
-        if not msgs:
-            print("任务 [" + name + "] 没有可发消息，跳过")
-            continue
-        text = secrets.choice(msgs)
+        text = None
+        if task.get("life_hook"):
+            text = life_hook_message()
+            if text:
+                print("任务 [" + name + "] 用时间线实况")
+        if not text:
+            msgs = task.get("messages", [])
+            if isinstance(msgs, str):
+                msgs = [msgs]
+            if not msgs:
+                print("任务 [" + name + "] 没有可发消息，跳过")
+                continue
+            text = secrets.choice(msgs)
         try:
             send_one(task, text)
         except Exception as e:

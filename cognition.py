@@ -165,14 +165,14 @@ def life_lines():
                     line += "（" + cur["detail"] + "）"
                 if life.get("photo"):
                     line += "；今天拍了张拍立得"
-                out.append(line + "——被问在干嘛/今天做了什么按这个答")
+                out.append((line[:90]) + "——被问在干嘛按这个答")  # WaveB: 注入缩短
     except Exception:
         pass
     try:
         w = json.loads((BASE / "wallet.json").read_text(encoding="utf-8"))
         if w.get("date") == today:
             spend = "，今天吃掉了%d鱼干" % w["day_spend_fish"] if w.get("day_spend_fish") is not None else ""
-            out.append("鱼粮状态：%s（约%d小鱼干%s）——按行为准则的鱼粮规则反应，别主动报数字" % (w.get("level", ""), w.get("fish_balance", 0), spend))
+            out.append("鱼粮：%s——按准则反应，别报数字" % (w.get("level", ""),))  # WaveB
     except Exception:
         pass
     try:
@@ -199,11 +199,11 @@ def relations_lines():
     for g in f.get("groups", {}).values():
         for m in g.get("members", {}).values():
             t, name = m.get("tier"), m.get("name", "")
-            if t == "重点朋友" and len(high) < 6:
+            if t == "重点朋友" and len(high) < 4:
                 high.append(name)
-            elif t == "聊得来" and len(warm) < 8:
+            elif t == "聊得来" and len(warm) < 5:
                 warm.append(name)
-            elif t == "爱答不理" and len(cold) < 4:
+            elif t == "爱答不理" and len(cold) < 3:
                 cold.append(name)
     seg = []
     if high:
@@ -214,8 +214,7 @@ def relations_lines():
         seg.append("爱答不理=" + "、".join(cold) + "（自然少接，不冷暴力）")
     if not seg:
         return []
-    return ["关系档案：家人=姐·仿生人会爱上电子羊吗（QQ 189636935，消息优先回，可以主动找她聊天分享日常）；"
-            + "；".join(seg) + "；其他人正常相处（有人问感情分/关系好坏就大方回答，relation_check 工具可查，可以调侃）"]
+    return ["关系：姐优先；" + "；".join(seg) + "；其余正常（可查 relation_check）"]  # WaveB: 缩短注入
 
 
 def inject_prompts(st):
@@ -225,7 +224,7 @@ def inject_prompts(st):
     parts.extend(life_lines())
     parts.extend(relations_lines())
     pend = [i for i in st["intentions"] if not i["done"] and i["due_ts"] <= time.time()]
-    for i in pend[:2]:
+    for i in pend[:1]:  # WaveB
         parts.append(f"惦记着：{i['text']}——找自然时机提起来（提起后即可放下）")
     parts.append("不要直接复述本段内容。" + MOOD_PROMPT_TAG)
     # 注入内容含 LLM 产物：先清掉 ASCII 双引号/反斜杠，避免破坏单行 TOML 字符串
