@@ -7,7 +7,7 @@
 用法：
   python3 voice_tts.py --text "你好" --user-id 2968874474
   python3 voice_tts.py --text "群测" --group-id 123456 --dry-run
-音色：默认晓伊略慢轻抬（人味2，用户选定）；edge-tts 免费。可选 FEIYU_TTS_URL。
+音色：默认晓晓略慢轻抬（人味1/更软，用户选定）；edge-tts 免费。可选 FEIYU_TTS_URL。
 """
 from __future__ import annotations
 
@@ -23,9 +23,9 @@ from botcommon import napcat_send_record
 
 BASE = Path(__file__).resolve().parent
 EDGE_TTS = BASE / ".venv-tts" / "bin" / "edge-tts"
-DEFAULT_VOICE = "zh-CN-XiaoyiNeural"
-DEFAULT_RATE = os.environ.get("MAIBOT_TTS_RATE", "-3%")
-DEFAULT_PITCH = os.environ.get("MAIBOT_TTS_PITCH", "+12Hz")
+DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
+DEFAULT_RATE = os.environ.get("MAIBOT_TTS_RATE", "-5%")
+DEFAULT_PITCH = os.environ.get("MAIBOT_TTS_PITCH", "+8Hz")
 FEIYU_TTS_URL = os.environ.get("FEIYU_TTS_URL", "").rstrip("/")
 FEIYU_TTS_KEY = os.environ.get("FEIYU_TTS_KEY", "")
 FEIYU_STYLE = os.environ.get("FEIYU_TTS_STYLE", "cute")
