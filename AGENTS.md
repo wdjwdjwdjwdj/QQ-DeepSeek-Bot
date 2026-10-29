@@ -49,6 +49,7 @@ Windows 计划任务（每分钟级短进程，无长驻）：
   MaiBotSisterChat      每30分钟 sister_chat.py   随机主动找姐聊天：概率门控(预期3~5条/天)+世界观实况LLM现写消息
   MaiBotContextMemory   每12小时  context_memory.py  上下文半天归档：上一半天聊天→智谱压缩→data/memory_notes/日期.md(幂等键=半日键,LLM失败不推进键下轮重试,只读db)；半日token超上限(300万)在节内标⚠️+私聊哥一次(alerts键幂等)
   MaiBotDailyReport     每日21:00 token_guard.py --report  当日账单
+  MaiBotEvolveLoop      每日02:15 evolve_loop.py     空闲自进化：提案写入 data/evolve_proposals（只用免费池，不改人设；idle≥60min）
 
 ZCode 自动化（非 Windows 计划任务，迁移服务器后应删除）：
   night_watch.py        每30分钟 night_watch.py     兜底监控：只读体检+watchdog 失效代跑+当日 9 点发送验证；由 ZCode 自动化"每30分钟守护检查"调用，绝不发群消息
