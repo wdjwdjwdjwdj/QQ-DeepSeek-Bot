@@ -81,12 +81,14 @@ ALLOWED_LLM_PAID = {
     "api.deepseek.com": {"https"},
 }
 
-# 免费优先级联：Z.AI → 商汤 → 智谱；付费 DeepSeek 默认关闭（cron 勿烧鱼粮）
+# 免费优先级联：Z.AI → 智谱永久免费 Flash → 商汤；付费 DeepSeek 默认关闭（cron 勿烧鱼粮）
+# 注：glm-5.3-flash 需资源包(1113)；glm-4-flash / glm-4-flash-250414 为平台永久免费层
 FREE_LLM_CASCADE = [
     ("ZAI", "https://api.z.ai/api/paas/v4/chat/completions", "glm-4.7-flash", {"thinking": {"type": "disabled"}}),
+    ("Zhipu", "https://open.bigmodel.cn/api/paas/v4/chat/completions", "glm-4-flash-250414", None),
+    ("Zhipu", "https://open.bigmodel.cn/api/paas/v4/chat/completions", "glm-4-flash", None),
     ("SenseNova", "https://token.sensenova.cn/v1/chat/completions", "deepseek-v4-flash", None),
     ("SenseNova", "https://token.sensenova.cn/v1/chat/completions", "deepseek-flash", None),
-    ("Zhipu", "https://open.bigmodel.cn/api/paas/v4/chat/completions", "glm-5.3-flash", None),
 ]
 PAID_LLM_CASCADE = [
     ("DeepSeek", "https://api.deepseek.com/chat/completions", "deepseek-flash", {"thinking": {"type": "disabled"}}),
@@ -126,7 +128,10 @@ def llm_free_chat(prompt, temperature=0.3, timeout=90, allow_paid=False, max_tok
                 },
                 timeout=timeout,
             )
-            text = res["choices"][0]["message"]["content"].strip()
+            msg = res["choices"][0]["message"]
+            text = (msg.get("content") or msg.get("reasoning_content") or "").strip()
+            if not text:
+                raise RuntimeError("empty content from %s/%s" % (provider, model))
             return text, provider, model
         except Exception as e:
             last_err = e
