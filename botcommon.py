@@ -77,12 +77,20 @@ ALLOWED_LLM_FREE = {
     "open.bigmodel.cn": {"https"},
     "api.z.ai": {"https"},
     "openrouter.ai": {"https"},
+    "tokenhub.tencentmaas.com": {"https"},
 }
 ALLOWED_LLM_PAID = {
     "api.deepseek.com": {"https"},
 }
 
-# 免费优先级联：Z.AI → 智谱永久免费 Flash → OpenRouter 免费 → 商汤；付费 DeepSeek 默认关闭（cron 勿烧鱼粮）
+# MaiBot 池内别名 tx-hy3；TokenHub Chat Completions 的 model 参数是 hy3。
+# 生产 toml 若把 identifier 配成别的值，llm_free_chat 以 toml 为准。
+TOKENHUB_POOL_ALIAS = "tx-hy3"
+TOKENHUB_CHAT_MODEL = "hy3"
+TOKENHUB_CHAT_URL = "https://tokenhub.tencentmaas.com/v1/chat/completions"
+
+# 免费优先级联：Z.AI → 智谱永久免费 Flash → OpenRouter 免费 → TokenHub tx-hy3 → 商汤
+# 付费 DeepSeek 默认关闭（cron 勿烧鱼粮）。tx-hy3 不进 planner 首位。
 # 注：glm-5.3-flash 需资源包(1113)；glm-4-flash / glm-4-flash-250414 为平台永久免费层
 FREE_LLM_CASCADE = [
     ("ZAI", "https://api.z.ai/api/paas/v4/chat/completions", "glm-4.7-flash", {"thinking": {"type": "disabled"}}),
@@ -90,12 +98,32 @@ FREE_LLM_CASCADE = [
     ("Zhipu", "https://open.bigmodel.cn/api/paas/v4/chat/completions", "glm-4-flash", None),
     ("OpenRouter", "https://openrouter.ai/api/v1/chat/completions", "openrouter/free", None),
     ("OpenRouter", "https://openrouter.ai/api/v1/chat/completions", "poolside/laguna-s-2.1:free", None),
+    ("TencentMaaS", TOKENHUB_CHAT_URL, TOKENHUB_CHAT_MODEL, None),
     ("SenseNova", "https://token.sensenova.cn/v1/chat/completions", "deepseek-v4-flash", None),
     ("SenseNova", "https://token.sensenova.cn/v1/chat/completions", "deepseek-flash", None),
 ]
 PAID_LLM_CASCADE = [
     ("DeepSeek", "https://api.deepseek.com/chat/completions", "deepseek-flash", {"thinking": {"type": "disabled"}}),
 ]
+
+
+def tokenhub_chat_model(default=None):
+    """toml 里 name=tx-hy3 的 model_identifier；没有配置文件时用 hy3。"""
+    default = TOKENHUB_CHAT_MODEL if default is None else default
+    if not MODEL_CONFIG.is_file():
+        return default
+    try:
+        import tomllib
+        with open(MODEL_CONFIG, "rb") as f:
+            cfg = tomllib.load(f)
+    except Exception as e:
+        print("tokenhub_chat_model 读配置失败，用", default, ":", type(e).__name__)
+        return default
+    for m in cfg.get("models") or []:
+        if m.get("name") == TOKENHUB_POOL_ALIAS:
+            ident = str(m.get("model_identifier") or "").strip()
+            return ident or default
+    return default
 
 
 def llm_free_chat(prompt, temperature=0.3, timeout=90, allow_paid=False, max_tokens=None):
@@ -111,8 +139,9 @@ def llm_free_chat(prompt, temperature=0.3, timeout=90, allow_paid=False, max_tok
             attempts.extend(PAID_LLM_CASCADE)
     last_err = None
     for provider, url, model, extra in attempts:
+        use_model = tokenhub_chat_model(model) if provider == "TencentMaaS" else model
         body_obj = {
-            "model": model,
+            "model": use_model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": temperature,
         }
@@ -146,11 +175,11 @@ def llm_free_chat(prompt, temperature=0.3, timeout=90, allow_paid=False, max_tok
             else:
                 text = content or (msg.get("reasoning_content") or "").strip()
             if not text:
-                raise RuntimeError("empty content from %s/%s" % (provider, model))
-            return text, provider, model
+                raise RuntimeError("empty content from %s/%s" % (provider, use_model))
+            return text, provider, use_model
         except Exception as e:
             last_err = e
-            print("llm_free_chat 失败 %s/%s: %s" % (provider, model, str(e)[:120]))
+            print("llm_free_chat 失败 %s/%s: %s" % (provider, use_model, str(e)[:120]))
     raise RuntimeError("llm_free_chat 全通道失败: " + str(last_err)[:160])
 
 
