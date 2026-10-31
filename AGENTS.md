@@ -50,6 +50,7 @@ Windows 计划任务（每分钟级短进程，无长驻）：
   MaiBotContextMemory   每12小时  context_memory.py  上下文半天归档：上一半天聊天→智谱压缩→data/memory_notes/日期.md(幂等键=半日键,LLM失败不推进键下轮重试,只读db)；半日token超上限(300万)在节内标⚠️+私聊哥一次(alerts键幂等)
   MaiBotDailyReport     每日21:00 token_guard.py --report  当日账单
   MaiBotEvolveLoop      每日02:15 evolve_loop.py     空闲自进化：提案写入 data/evolve_proposals（只用免费池，不改人设；idle≥60min）
+  MaiBotNoreplyWatch    PT5M   noreply_watch.py    进消息但不回复告警：扫 app_*.log.jsonl 哑火→私聊哥哥(幂等)；--dry-run 只判定
 
 ZCode 自动化（非 Windows 计划任务，迁移服务器后应删除）：
   night_watch.py        每30分钟 night_watch.py     兜底监控：只读体检+watchdog 失效代跑+当日 9 点发送验证；由 ZCode 自动化"每30分钟守护检查"调用，绝不发群消息
@@ -101,6 +102,7 @@ py verify_planner_pool.py     # planner 首位必须在 TOOL_CAPABLE_PLANNER_HEA
 py verify_planner_pool.py --live  # 可选：对 planner[0] 真发 tools 冒烟（出网）
 py verify_budget_gate.py       # 日预算门控纯函数 + toml rewrite
 py verify_budget_gate.py --dry-run  # 对照生产 model_config 预览踢/恢复（不写盘）
+py verify_noreply_watch.py     # 进消息不回复告警纯函数（哑火/健康/幂等，不发 QQ）
 ```
 
 涉及守护/自愈逻辑的改动：先在纸上推演状态机（down_since / last_start / 冷却 / 超时重拉四态），确认每条转移都有出口，再动代码。
@@ -134,4 +136,15 @@ py verify_budget_gate.py --dry-run  # 对照生产 model_config 预览踢/恢复
 - 未超/新日：自动把付费回复模型加回池尾；锁态翻转时私聊通知哥哥
 - `botcommon.llm_free_chat(allow_paid=True)` 在锁态下也会忽略付费级联
 - 改预算：只改 `budget_config.json` 的 `daily_cny` / `enabled`；改完下轮 cron 生效，或手动 `python3 token_guard.py --budget-only`
+
+## 运维教训：进消息但不回复告警（2026-10-31）
+
+降本误配 planner 后会出现「消息进、Planner 跑完、从不 reply/SendService」。方向4：
+
+- 脚本：根目录 `noreply_watch.py`（路径固定）；状态 `my-maibot/data/noreply_watch_state.json`
+- 判定：近 N 分钟（默认15）有入站且过宽限（默认4分钟）仍无 `[SendService] 成功发送消息`；或同窗有 `Planner 已结束本轮思考` 且邻近无 `工具=reply`（且无成功发送）
+- 告警：私聊哥哥（`OWNER_QQ` 同 token_guard）；同一哑火指纹只告一次，恢复（再见成功发送）清锁
+- cron：每 5 分钟；`python3 noreply_watch.py --dry-run` 只打印 JSON；`--test` 强制测发（勿刷）
+- **night_watch 绝不发 QQ**；可选只读检查 `noreply_watch_state.json`
+- 单测：`python3 verify_noreply_watch.py`
 

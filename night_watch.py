@@ -152,6 +152,26 @@ def main():
         checks["sender_state_valid"] = False
         problems.append(f"scheduled_sender_state.json 损坏: {e}")
 
+
+    # 只读：最近一次 noreply_watch 判定（本脚本绝不发 QQ）
+    noreply_state = BASE / "my-maibot" / "data" / "noreply_watch_state.json"
+    try:
+        if noreply_state.is_file():
+            ns = json.loads(noreply_state.read_text(encoding="utf-8"))
+            checks["noreply_alerting"] = bool(ns.get("alerting"))
+            lv = ns.get("last_verdict") or {}
+            checks["noreply_last_dumb"] = bool(lv.get("is_dumb"))
+            if ns.get("alerting"):
+                problems.append(
+                    f"noreply_watch alerting fingerprint={ns.get('last_fingerprint', '')}"
+                )
+        else:
+            checks["noreply_alerting"] = False
+            checks["noreply_last_dumb"] = False
+    except Exception as e:
+        checks["noreply_state_ok"] = False
+        problems.append(f"noreply_watch_state read error: {e}")
+
     if preflight_mode:
         checks["preflight"] = preflight(uid) if uid else "napcat_offline"
 
