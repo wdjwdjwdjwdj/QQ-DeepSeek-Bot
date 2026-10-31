@@ -76,17 +76,20 @@ ALLOWED_LLM_FREE = {
     "token.sensenova.cn": {"https"},
     "open.bigmodel.cn": {"https"},
     "api.z.ai": {"https"},
+    "openrouter.ai": {"https"},
 }
 ALLOWED_LLM_PAID = {
     "api.deepseek.com": {"https"},
 }
 
-# 免费优先级联：Z.AI → 智谱永久免费 Flash → 商汤；付费 DeepSeek 默认关闭（cron 勿烧鱼粮）
+# 免费优先级联：Z.AI → 智谱永久免费 Flash → OpenRouter 免费 → 商汤；付费 DeepSeek 默认关闭（cron 勿烧鱼粮）
 # 注：glm-5.3-flash 需资源包(1113)；glm-4-flash / glm-4-flash-250414 为平台永久免费层
 FREE_LLM_CASCADE = [
     ("ZAI", "https://api.z.ai/api/paas/v4/chat/completions", "glm-4.7-flash", {"thinking": {"type": "disabled"}}),
     ("Zhipu", "https://open.bigmodel.cn/api/paas/v4/chat/completions", "glm-4-flash-250414", None),
     ("Zhipu", "https://open.bigmodel.cn/api/paas/v4/chat/completions", "glm-4-flash", None),
+    ("OpenRouter", "https://openrouter.ai/api/v1/chat/completions", "openrouter/free", None),
+    ("OpenRouter", "https://openrouter.ai/api/v1/chat/completions", "poolside/laguna-s-2.1:free", None),
     ("SenseNova", "https://token.sensenova.cn/v1/chat/completions", "deepseek-v4-flash", None),
     ("SenseNova", "https://token.sensenova.cn/v1/chat/completions", "deepseek-flash", None),
 ]
@@ -120,19 +123,28 @@ def llm_free_chat(prompt, temperature=0.3, timeout=90, allow_paid=False, max_tok
         allowed = dict(ALLOWED_LLM_FREE)
         if provider == "DeepSeek":
             allowed = dict(ALLOWED_LLM_PAID)
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + load_provider_key(provider),
+        }
+        if provider == "OpenRouter":
+            headers["HTTP-Referer"] = "https://github.com/wdjwdjwdjwdj/QQ-DeepSeek-Bot"
+            headers["X-Title"] = "MaiBot-DaFeiYu"
         try:
             res = http_json(
                 url,
                 allowed,
                 data=json.dumps(body_obj).encode("utf-8"),
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": "Bearer " + load_provider_key(provider),
-                },
+                headers=headers,
                 timeout=timeout,
             )
             msg = res["choices"][0]["message"]
-            text = (msg.get("content") or msg.get("reasoning_content") or "").strip()
+            content = (msg.get("content") or "").strip()
+            # OpenRouter 免费层偶发只有 reasoning、content 为空：按空 content 失败并级联
+            if provider == "OpenRouter":
+                text = content
+            else:
+                text = content or (msg.get("reasoning_content") or "").strip()
             if not text:
                 raise RuntimeError("empty content from %s/%s" % (provider, model))
             return text, provider, model
