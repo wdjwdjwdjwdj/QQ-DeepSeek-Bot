@@ -61,6 +61,8 @@ ZCode 自动化（非 Windows 计划任务，迁移服务器后应删除）：
                         端口被占自动退出；手动重启用 onebot-qzone/start_bridge.bat）
 ```
 
+免费对话级联（cron `llm_free_chat`，2026-10-31）：Z.AI → 智谱 → OpenRouter → **TokenHub `tx-hy3`**（平台 model `hy3`，TencentMaaS）→ 商汤。replyer / utils / fast_model 中后段同步挂 `tx-hy3`（服务器 `python3 deploy/add_tokenhub_chat.py`，幂等）。planner 首位仍是 `deepseek-flash-planner`，embedding 不动。
+
 ## 目录红线
 
 | 位置 | 性质 | 规则 |
@@ -103,6 +105,7 @@ py verify_planner_pool.py --live  # 可选：对 planner[0] 真发 tools 冒烟�
 py verify_budget_gate.py       # 日预算门控纯函数 + toml rewrite
 py verify_budget_gate.py --dry-run  # 对照生产 model_config 预览踢/恢复（不写盘）
 py verify_noreply_watch.py     # 进消息不回复告警纯函数（哑火/健康/幂等，不发 QQ）
+py verify_free_cascade.py      # TokenHub tx-hy3 级联顺序 + 对话池补丁（不改 planner/embedding，不出网）
 ```
 
 涉及守护/自愈逻辑的改动：先在纸上推演状态机（down_since / last_start / 冷却 / 超时重拉四态），确认每条转移都有出口，再动代码。
