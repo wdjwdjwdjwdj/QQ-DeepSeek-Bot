@@ -47,7 +47,7 @@ Windows 计划任务（每分钟级短进程，无长驻）：
   MaiBotQzoneSocial     PT1H   qzone_social.py     Qzone社交：刷好友动态+关系分加权点赞+AI评论(拟人节律,每日赞≤12评≤4,键uin:tid幂等,--dry-run只读)
   MaiBotFriendsReview   每日04:45 friends_ledger.py 关系账本：滚动24h复盘调分(智谱免费,幂等,--dry-run可试跑)
   MaiBotVoiceTTS           按需    voice_tts.py       语音合成发送（edge-tts→NapCat；也可被 VoiceSpeak 插件调用）
-  MaiBotSisterChat      每30分钟 sister_chat.py   随机主动找姐聊天：概率门控(预期3~5条/天)+世界观实况LLM现写消息
+  MaiBotSisterChat      已关闭 sister_chat.py     总开关 sister_chat_config.json enabled=false（含 --force 不发；scheduled_sender 对姐的私聊任务同时跳过）；crontab 行已注释。姐来消息仍由 MaiBot 回复，人设/记忆不删
   MaiBotContextMemory   每12小时  context_memory.py  上下文半天归档：上一半天聊天→智谱压缩→data/memory_notes/日期.md(幂等键=半日键,LLM失败不推进键下轮重试,只读db)；半日token超上限(300万)在节内标⚠️+私聊哥一次(alerts键幂等)
   MaiBotDailyReport     每日21:00 token_guard.py --report  当日账单
   MaiBotEvolveLoop      每日02:15 evolve_loop.py     空闲自进化：提案写入 data/evolve_proposals（只用免费池，不改人设；idle≥60min）
@@ -110,6 +110,7 @@ py verify_noreply_watch.py     # 进消息不回复告警纯函数（哑火/健�
 py verify_free_cascade.py      # TokenHub tx-hy3 级联顺序 + 对话池补丁（不改 planner/embedding，不出网）
 py verify_person_memory.py     # 按人 fail-closed / user_id 优先 / 账本不跨群暗绑 / 审计只读
 py verify_persona_anchor.py    # 人设短锚 + 注意力分表 + 工作记忆口气（不改生产 toml）
+py verify_sister_chat.py       # 姐定时私聊总开关：enabled=false 时不调用 LLM/NapCat；crontab 无生效行
 ```
 
 涉及守护/自愈逻辑的改动：先在纸上推演状态机（down_since / last_start / 冷却 / 超时重拉四态），确认每条转移都有出口，再动代码。
