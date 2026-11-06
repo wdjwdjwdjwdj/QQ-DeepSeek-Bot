@@ -9,6 +9,7 @@ user_id / group_id 由宿主从真实消息上下文注入，不在工具参数�
 因此不能被对话内容伪造（与 SchedulerManager 同一机制）。
 """
 import json
+import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -21,6 +22,9 @@ SISTER_NAME = "仿生人会爱上电子羊吗"
 
 BASE = Path(__file__).resolve().parents[3]  # plugins/FriendLedger -> my-maibot -> QQ-DeepSeek-Bot
 LEDGER_FILE = BASE / "friends.json"
+if str(BASE) not in sys.path:
+    sys.path.insert(0, str(BASE))
+import person_memory  # noqa: E402
 
 
 def _load_ledger() -> Dict[str, Any]:
@@ -29,19 +33,24 @@ def _load_ledger() -> Dict[str, Any]:
     return json.loads(LEDGER_FILE.read_text(encoding="utf-8"))
 
 
-def _all_members() -> Dict[str, Dict[str, Any]]:
-    d = _load_ledger()
-    out: Dict[str, Dict[str, Any]] = {}
-    for g in d.get("groups", {}).values():
-        for qq, m in g.get("members", {}).items():
-            out[qq] = m
-    return out
-
-
-def _fmt(qq: str, m: Dict[str, Any]) -> str:
-    return "%s（QQ %s）：感情分 %s，档位「%s」，最近变化：%s" % (
-        m.get("name", qq), qq, m.get("score", 0), m.get("tier", "普通"), m.get("last_change", "无"),
+def _fmt(row: Dict[str, Any]) -> str:
+    return "%s（QQ %s，群 %s）：感情分 %s，档位「%s」，最近变化：%s" % (
+        row.get("name") or row.get("qq"),
+        row.get("qq"),
+        row.get("group_id") or "?",
+        row.get("score", 0),
+        row.get("tier", "普通"),
+        row.get("last_change", "无"),
     )
+
+
+def _fmt_many(rows: list) -> str:
+    shown = rows[:8]
+    text = "；".join(_fmt(row) for row in shown)
+    extra = len(rows) - len(shown)
+    if extra > 0:
+        text += "；还有 %d 个未列出" % extra
+    return text
 
 
 class FriendLedgerPlugin(MaiBotPlugin):
@@ -52,20 +61,21 @@ class FriendLedgerPlugin(MaiBotPlugin):
         description=(
             "查感情分（关系账本）。当有人问起你和他的感情分/亲密度/关系好坏"
             "（如「我们的感情分多少」「你是不是讨厌我」「你觉得我怎么样」）时调用。"
-            "who 留空=查提问的人自己；传群友名字=查你和他/她的关系。"
+            "who 留空=查提问的人自己；查别人优先传 QQ，名字重了会列出候选人，不要猜。"
             "拿到结果后用你自己的口吻自然回答，可以调侃可以傲娇，不要像报账一样念数字。"
         ),
         parameters=[
             ToolParameterInfo(
                 name="who",
                 param_type=ToolParamType.STRING,
-                description="要查谁的：留空=提问的人自己；或传群友的名字/群昵称",
+                description="要查谁的：留空=提问的人自己；优先传对方 QQ，也可以传名字（重名会列出候选人）",
                 required=False,
             ),
         ],
     )
     async def relation_check(self, who: str = "", **kwargs: Any) -> Dict[str, Any]:
         user_id = str(kwargs.get("user_id") or "").strip()
+        group_id = str(kwargs.get("group_id") or "").strip()
         who = str(who or "").strip()
 
         if not who or who in ("自己", "我", "提问的人"):
@@ -73,29 +83,34 @@ class FriendLedgerPlugin(MaiBotPlugin):
                 return {"success": True, "content": "哥（QQ 2968874474）：不走感情分——认哥规则里你永远最亲，按认哥的方式答即可。"}
             if user_id == SISTER_QQ:
                 return {"success": True, "content": "姐（QQ " + SISTER_QQ + "）：家人不走感情分——按姐的方式亲近作答，可以说「姐还用打分吗」。"}
-            members = _all_members()
-            m = members.get(user_id)
-            if not m:
-                return {"success": True, "content": "对方还没进你的关系账本（普通群友默认档）。用「关系档案」的口径自然回答，可以说「我们才刚认识没多久嘛」。"}
-            return {"success": True, "content": _fmt(user_id, m) + "。用你的口吻把档位说成人话，别直接念数字。"}
-
-        members = _all_members()
-        if user_id == OWNER_QQ and who in ("我", "自己"):
-            return {"success": True, "content": "哥不走感情分，永远最亲。"}
         if who in ("姐", "我姐", "你姐") or "仿生人" in who or SISTER_NAME in who:
             return {"success": True, "content": "姐（QQ " + SISTER_QQ + "）：家人不走感情分——按姐的方式亲近作答，可以说「姐还用打分吗」。"}
-        hits = [(qq, m) for qq, m in members.items() if m.get("name") == who]
-        if not hits:
-            hits = [(qq, m) for qq, m in members.items() if who in str(m.get("name", ""))]
-        if not hits:
+        if user_id == OWNER_QQ and who in ("我", "自己"):
+            return {"success": True, "content": "哥不走感情分，永远最亲。"}
+
+        found = person_memory.relation_lookup(
+            _load_ledger(), who, user_id=user_id, group_id=group_id,
+        )
+        status = found["status"]
+        matches = found["matches"]
+        if status == "miss":
+            if not who or who in ("自己", "我", "提问的人"):
+                return {"success": True, "content": "对方还没进你的关系账本（普通群友默认档）。用「关系档案」的口径自然回答，可以说「我们才刚认识没多久嘛」。"}
             return {"success": True, "content": "账本里没有叫「" + who + "」的人。可以说不认识或者让对方先混个脸熟。"}
-        if len(hits) > 1:
-            found = "；".join(_fmt(qq, m) for qq, m in hits[:3])
-            return {"success": True, "content": "找到多个同名/近名的人：" + found + "。结合聊天对象判断是哪个，或模糊作答。"}
-        qq, m = hits[0]
-        return {"success": True, "content": _fmt(qq, m) + "。用你的口吻把档位说成人话，别直接念数字。"}
+        if status == "ambiguous":
+            return {
+                "success": True,
+                "content": "名字或跨群对不上，不能暗自绑一个。候选人：" + _fmt_many(matches) + "。列给对方听，让对方说清是哪个群、哪个 QQ，不要自己挑一个。",
+            }
+        row = matches[0]
+        tail = "。用你的口吻把档位说成人话，别直接念数字。"
+        return {"success": True, "content": _fmt(row) + tail}
 
     async def on_load(self) -> None:
+        try:
+            person_memory.install()
+        except Exception as exc:
+            self.ctx.logger.info("person_memory 包装未挂上（跳过，不挡账本）: " + str(exc)[:120])
         self.ctx.logger.info("FriendLedger 已加载，账本文件: " + str(LEDGER_FILE))
 
     async def on_unload(self) -> None:
