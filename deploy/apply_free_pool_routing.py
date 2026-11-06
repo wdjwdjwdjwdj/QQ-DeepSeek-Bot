@@ -63,7 +63,14 @@ def find_config():
 
 
 def _section_exists(text, task):
-    return re.search(r"(?m)^\[model_task_config\.%s\]\s*$" % re.escape(task), text) is not None
+    """段头允许行尾注释；生产 toml 常见 [model_task_config.x] # 说明。"""
+    return (
+        re.search(
+            r"(?m)^\[model_task_config\.%s\]\s*(?:#.*)?$" % re.escape(task),
+            text,
+        )
+        is not None
+    )
 
 
 def ensure_aux_section(text, task, model_list):
