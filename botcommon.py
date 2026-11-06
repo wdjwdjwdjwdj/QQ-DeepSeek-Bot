@@ -89,13 +89,14 @@ TOKENHUB_POOL_ALIAS = "tx-hy3"
 TOKENHUB_CHAT_MODEL = "hy3"
 TOKENHUB_CHAT_URL = "https://tokenhub.tencentmaas.com/v1/chat/completions"
 
-# 免费优先级联：Z.AI → 智谱永久免费 Flash → OpenRouter 免费 → TokenHub tx-hy3 → 商汤
-# 付费 DeepSeek 默认关闭（cron 勿烧鱼粮）。tx-hy3 不进 planner 首位。
+# 免费优先级联（2026-11-06）：智谱稳定层在前，Z.AI 让位（互动与 cron 不再抢同一热配额）。
+# 尾部 OpenRouter / TokenHub / 商汤保留作保险，不删除；失败后按 TAIL_PROBE_INTERVAL_SECONDS 降频。
+# 付费 DeepSeek 不在此表。tx-hy3 不进 planner 首位。
 # 注：glm-5.3-flash 需资源包(1113)；glm-4-flash / glm-4-flash-250414 为平台永久免费层
 FREE_LLM_CASCADE = [
-    ("ZAI", "https://api.z.ai/api/paas/v4/chat/completions", "glm-4.7-flash", {"thinking": {"type": "disabled"}}),
     ("Zhipu", "https://open.bigmodel.cn/api/paas/v4/chat/completions", "glm-4-flash-250414", None),
     ("Zhipu", "https://open.bigmodel.cn/api/paas/v4/chat/completions", "glm-4-flash", None),
+    ("ZAI", "https://api.z.ai/api/paas/v4/chat/completions", "glm-4.7-flash", {"thinking": {"type": "disabled"}}),
     ("OpenRouter", "https://openrouter.ai/api/v1/chat/completions", "openrouter/free", None),
     ("OpenRouter", "https://openrouter.ai/api/v1/chat/completions", "poolside/laguna-s-2.1:free", None),
     ("TencentMaaS", TOKENHUB_CHAT_URL, TOKENHUB_CHAT_MODEL, None),
@@ -105,6 +106,178 @@ FREE_LLM_CASCADE = [
 PAID_LLM_CASCADE = [
     ("DeepSeek", "https://api.deepseek.com/chat/completions", "deepseek-flash", {"thinking": {"type": "disabled"}}),
 ]
+
+# 一次 429 即熔断，与 08 文档里 MaiBot 熔断冷却同量级；脚本侧让出 Z.AI 配额。
+ZAI_COOLDOWN_SECONDS = 600
+# 互动池里 Z.AI provider 的重试收紧：429 不要在同一模型上空转，sequential 尽快换到智谱。
+ZAI_PROVIDER_MAX_RETRY = 1
+ZAI_PROVIDER_RETRY_INTERVAL = 1
+# 头层全失败后才打到尾部；打过一次后这段时间内不再盲探。
+TAIL_PROBE_INTERVAL_SECONDS = 1800
+TAIL_CASCADE_PROVIDERS = frozenset({"OpenRouter", "TencentMaaS", "SenseNova"})
+CASCADE_CIRCUIT_STATE = BASE / "my-maibot" / "data" / "llm_cascade_circuit_state.json"
+
+# 不传 tools 的旁路任务（MaiBot 源码核对，2026-11）：
+# emoji：emoji_manager.replace_an_emoji_by_llm / send_emoji 子代理默认 tool_definitions=[]。
+#   model_list 为空时替换决策 task_name 落到 planner，记账打在 deepseek-flash-planner。
+# learner：expression_learner / expression_utils / jargon_* 只 generate_response，不传 tools。
+#   空列表会继用 utils（含付费尾）。
+# 不在此列：planner、compaction、reply_supplement（继承 planner 或要工具）、
+# voice（ASR）、vlm、embedding、memory。
+NON_TOOL_AUX_TASKS = ("emoji", "learner")
+# 与现网 replyer/utils/fast 免费段同名，智谱在 Z.AI 前；不含 deepseek-flash-planner / 付费回复。
+FREE_AUX_MODEL_ORDER = (
+    "zp-4flash",
+    "zp-4flash-b",
+    "zai-flash",
+    "or-free",
+    "or-laguna",
+    "ds-v4-flash",
+    "sn-ds",
+    "tx-hy3",
+)
+AUX_FORBIDDEN_MODELS = frozenset({
+    "deepseek-flash-planner",
+    "deepseek-flash-reply",
+    "deepseek-flash",
+    "balance",
+})
+# 只调整这几个已经是 sequential 的对话池里 Z.AI 与智谱的相对顺序，不动 planner。
+CHAT_POOLS_YIELD_ZAI = ("replyer", "utils", "fast_model", "fast")
+ZHIPU_POOL_NAMES = frozenset({"zp-4flash", "zp-4flash-b", "zp-flash", "zp-flashx"})
+ZAI_POOL_NAMES = frozenset({"zai-flash"})
+
+
+def free_aux_model_list(available_names):
+    """按固定顺序取出配置里真实存在的免费旁路模型。不含 DeepSeek / 字面量 balance。"""
+    available = {str(name) for name in (available_names or [])}
+    return [name for name in FREE_AUX_MODEL_ORDER if name in available]
+
+
+def move_zai_after_zhipu(model_list):
+    """把 zai-flash 挪到本列表里最后一个智谱模型之后。没有智谱或没有 Z.AI 时原样返回。
+
+    其余名字的相对顺序保持不变，付费尾和 vlm 不会被提前。
+    """
+    models = list(model_list or [])
+    zp_idx = [i for i, name in enumerate(models) if name in ZHIPU_POOL_NAMES]
+    zai_idx = [i for i, name in enumerate(models) if name in ZAI_POOL_NAMES]
+    if not zp_idx or not zai_idx:
+        return models
+    if min(zai_idx) > max(zp_idx):
+        return models
+    zai_set = set(zai_idx)
+    without = [name for i, name in enumerate(models) if i not in zai_set]
+    last_zp = max(i for i, name in enumerate(without) if name in ZHIPU_POOL_NAMES)
+    zai_models = [models[i] for i in zai_idx]
+    return without[: last_zp + 1] + zai_models + without[last_zp + 1 :]
+
+
+def cascade_text_ok(text):
+    """可核验的正文门：空、纯空白、纯标点不算成功。单字「嗯」「好」和 ok 放行。"""
+    if text is None:
+        return False
+    stripped = str(text).strip()
+    if not stripped:
+        return False
+    # isalnum 覆盖汉字与字母数字；纯下划线/省略号没有可读字符，不算成功。
+    return any(ch.isalnum() for ch in stripped)
+
+
+def cascade_result_ok(text, tool_calls=None, require_tool_call=False):
+    """成功判定。require_tool_call 时只认非空 tool_calls，不把「我应该调用工具」的正文当成功。
+
+    默认不要求 tool_call：MaiBot planner 的等待/停止可以没有工具调用，本函数不替那条路径做推断。
+    """
+    if require_tool_call:
+        return isinstance(tool_calls, (list, tuple)) and len(tool_calls) > 0
+    return cascade_text_ok(text)
+
+
+def is_rate_limit_error(exc):
+    """只认 429。不把正文里偶然出现的数字 429 当成限流。"""
+    for attr in ("code", "status", "status_code"):
+        value = getattr(exc, attr, None)
+        try:
+            if int(value) == 429:
+                return True
+        except (TypeError, ValueError):
+            pass
+    message = str(exc)
+    markers = (
+        "HTTP Error 429",
+        "Error code: 429",
+        "status code 429",
+        "status_code=429",
+        "status_code: 429",
+    )
+    return any(marker in message for marker in markers)
+
+
+def load_cascade_circuit(path=None):
+    """读熔断状态。缺文件或坏 JSON 当空表，不抛给调用方。"""
+    path = Path(path) if path else CASCADE_CIRCUIT_STATE
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print("cascade circuit 读失败，当空:", type(e).__name__)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_cascade_circuit(state, path=None):
+    """增量落盘：调用方应先读旧表再改字段，这里整表原子写回。"""
+    path = Path(path) if path else CASCADE_CIRCUIT_STATE
+    write_json_atomic(path, state if isinstance(state, dict) else {})
+
+
+def plan_free_attempts(attempts, state, now):
+    """按熔断与尾部探测间隔过滤本次要打的级联。不修改 state。"""
+    state = state or {}
+    try:
+        zai_until = float(state.get("zai_open_until") or 0)
+    except (TypeError, ValueError):
+        zai_until = 0
+    zai_blocked = zai_until > float(now)
+    try:
+        tail_at = float(state.get("tail_probed_at") or 0)
+    except (TypeError, ValueError):
+        tail_at = 0
+    tails_due = (float(now) - tail_at) >= TAIL_PROBE_INTERVAL_SECONDS
+    planned = []
+    for item in attempts:
+        provider = item[0]
+        if provider == "ZAI" and zai_blocked:
+            continue
+        if provider in TAIL_CASCADE_PROVIDERS and not tails_due:
+            continue
+        planned.append(item)
+    return planned
+
+
+def note_zai_429(state, now):
+    """一次 429 打开 Z.AI 熔断。保留 state 里的其他字段。"""
+    updated = dict(state or {})
+    updated["zai_open_until"] = float(now) + ZAI_COOLDOWN_SECONDS
+    updated["zai_reason"] = "429"
+    return updated
+
+
+def note_zai_success(state):
+    """Z.AI 成功则清熔断，其他字段保留。"""
+    updated = dict(state or {})
+    updated["zai_open_until"] = 0
+    updated.pop("zai_reason", None)
+    return updated
+
+
+def note_tail_probe(state, now):
+    """记录尾部已探测，窗口内不再盲探。其他字段保留。"""
+    updated = dict(state or {})
+    updated["tail_probed_at"] = float(now)
+    return updated
 
 
 def tokenhub_chat_model(default=None):
@@ -126,19 +299,55 @@ def tokenhub_chat_model(default=None):
     return default
 
 
-def llm_free_chat(prompt, temperature=0.3, timeout=90, allow_paid=False, max_tokens=None):
+def llm_free_chat(
+    prompt,
+    temperature=0.3,
+    timeout=90,
+    allow_paid=False,
+    max_tokens=None,
+    require_tool_call=False,
+    circuit_state=None,
+    now=None,
+):
     """免费优先 chat completions。默认 allow_paid=False，全免费失败则抛错不烧 DeepSeek。
 
+    空正文、纯标点不算成功，继续下一层。require_tool_call=True 时没有 tool_calls 也不算成功
+    （默认 False：cron 脚本要的是正文，不在这里推断 planner 是否该调工具）。
+    Z.AI 遇到 429 立刻熔断一段时间；OpenRouter / TokenHub / 商汤仍在表里，但探测过一次后降频。
+
     返回 (text, provider, model)。调用方按需解析 JSON / 校验格式。
+    circuit_state 仅给测试注入；生产路径自己读盘，并在返回前把熔断增量写回。
     """
+    import time as _time
+
     attempts = list(FREE_LLM_CASCADE)
     if allow_paid:
         if is_paid_budget_locked():
             print("llm_free_chat: 日预算已锁，忽略 allow_paid")
         else:
             attempts.extend(PAID_LLM_CASCADE)
+    own_state = circuit_state is None
+    state = load_cascade_circuit() if own_state else dict(circuit_state)
+    now = _time.time() if now is None else float(now)
+    planned = plan_free_attempts(attempts, state, now)
+    if len(planned) != len(attempts):
+        skipped = ["%s/%s" % (provider, model) for provider, _url, model, _extra in attempts if (provider, model) not in {
+            (item[0], item[2]) for item in planned
+        }]
+        print("llm_free_chat 跳过:", ", ".join(skipped))
     last_err = None
-    for provider, url, model, extra in attempts:
+    tail_used = False
+
+    def _persist():
+        if own_state:
+            try:
+                save_cascade_circuit(state)
+            except Exception as e:
+                print("cascade circuit 落盘失败:", type(e).__name__)
+
+    for provider, url, model, extra in planned:
+        if provider in TAIL_CASCADE_PROVIDERS:
+            tail_used = True
         use_model = tokenhub_chat_model(model) if provider == "TencentMaaS" else model
         body_obj = {
             "model": use_model,
@@ -168,18 +377,32 @@ def llm_free_chat(prompt, temperature=0.3, timeout=90, allow_paid=False, max_tok
                 timeout=timeout,
             )
             msg = res["choices"][0]["message"]
+            # 只认 content。reasoning 独白（包括「应使用某工具」）不是可核验成功。
             content = (msg.get("content") or "").strip()
-            # OpenRouter 免费层偶发只有 reasoning、content 为空：按空 content 失败并级联
-            if provider == "OpenRouter":
-                text = content
-            else:
-                text = content or (msg.get("reasoning_content") or "").strip()
-            if not text:
-                raise RuntimeError("empty content from %s/%s" % (provider, use_model))
+            tool_calls = msg.get("tool_calls") or []
+            if not cascade_result_ok(content, tool_calls, require_tool_call=require_tool_call):
+                why = "missing tool_call" if require_tool_call else "empty or punctuation-only content"
+                raise RuntimeError("quality gate %s from %s/%s" % (why, provider, use_model))
+            text = content
+            if require_tool_call and not text:
+                text = json.dumps(tool_calls, ensure_ascii=False)
+            if provider == "ZAI":
+                state = note_zai_success(state)
+            if tail_used:
+                state = note_tail_probe(state, now)
+            _persist()
             return text, provider, use_model
         except Exception as e:
             last_err = e
+            if provider == "ZAI" and is_rate_limit_error(e):
+                state = note_zai_429(state, now)
+                _persist()
             print("llm_free_chat 失败 %s/%s: %s" % (provider, use_model, str(e)[:120]))
+    if tail_used:
+        state = note_tail_probe(state, now)
+        _persist()
+    elif own_state and state != load_cascade_circuit():
+        _persist()
     raise RuntimeError("llm_free_chat 全通道失败: " + str(last_err)[:160])
 
 

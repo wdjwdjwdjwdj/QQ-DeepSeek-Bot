@@ -76,11 +76,21 @@ def test_cascade_order():
     print("[1] FREE_LLM_CASCADE：TokenHub 在 OpenRouter 之后、商汤之前")
     pairs = [(p, m) for p, _u, m, _e in botcommon.FREE_LLM_CASCADE]
     check("级联含 TencentMaaS/hy3", ("TencentMaaS", "hy3") in pairs, str(pairs))
+    i_zp = pairs.index(("Zhipu", "glm-4-flash-250414"))
+    i_zai = pairs.index(("ZAI", "glm-4.7-flash"))
     i_or = max(i for i, item in enumerate(pairs) if item[0] == "OpenRouter")
     i_tx = pairs.index(("TencentMaaS", "hy3"))
     i_sn = pairs.index(("SenseNova", "deepseek-v4-flash"))
     check("OpenRouter < TokenHub < SenseNova", i_or < i_tx < i_sn, str((i_or, i_tx, i_sn)))
-    check("首位仍是 ZAI", pairs[0][0] == "ZAI", pairs[0][0])
+    check("首位是智谱，ZAI 让位", pairs[0][0] == "Zhipu" and i_zp < i_zai < i_or, str(pairs[:4]))
+    check(
+        "尾部 OpenRouter/TokenHub/商汤仍在",
+        ("OpenRouter", "openrouter/free") in pairs
+        and ("OpenRouter", "poolside/laguna-s-2.1:free") in pairs
+        and ("SenseNova", "deepseek-flash") in pairs,
+        str(pairs),
+    )
+    check("默认免费级联不含付费 DeepSeek", all(p != "DeepSeek" for p, _m in pairs), str(pairs))
     check("planner 付费级联未插入 TokenHub", all(p != "TencentMaaS" for p, _m in [
         (a, c) for a, _b, c, _d in botcommon.PAID_LLM_CASCADE
     ]))
