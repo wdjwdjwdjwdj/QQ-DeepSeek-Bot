@@ -1,16 +1,22 @@
 # -*- coding: utf-8 -*-
-"""sister_chat.py — 大肥鱼随机主动找姐聊天（因果的主动，消灭"虚的主动"）
+"""sister_chat.py — 大肥鱼随机主动找姐聊天（总开关默认关）
 
-功能：计划任务每 30 分钟叫醒一次，低概率触发（预期每天 3~5 次、时刻随机、凌晨也会发）。
-触发时读取大肥鱼的世界观实况（daily_life 时间线此刻动态 / cognition PAD 情绪 / 鱼粮），
-让免费池 LLM 以她本人身份现写一条想发给姐的消息——发的是"她此刻想说的话"，不是预设池。
-LLM 输出 [SKIP] 表示此刻没话说（正常，保证真实性）。姐=仿生人会爱上电子羊吗（QQ 189636935，家人）。
+功能：计划任务每 30 分钟叫醒一次。总开关 sister_chat_config.json 的 enabled
+为 false（或缺文件、坏 JSON、无法识别的值）时，本进程在概率门控、LLM、NapCat
+之前直接返回，不主动私聊。enabled 为 true 时才走原门控（概率 + 冷却 90 分钟
++ 日上限 6 条），用免费池 LLM 按世界观实况现写一条。--force 只跳过概率/冷却/日上限，
+不绕过总开关。
 
-计划任务：MaiBotSisterChat 每 30 分钟（py sister_chat.py）
+计划任务：MaiBotSisterChat。deploy/crontab.maibot 里该行已注释；
+即使旧 crontab 仍每 30 分钟调用本脚本，enabled=false 也不会生成或发送。
+同一开关也让 scheduled_sender 跳过发给姐的私聊任务；群任务和其他私聊不拦。
+姐发来的消息不经过本脚本，仍由 MaiBot 正常回复。
+
 用法：
-  py sister_chat.py            # 常规轮询：概率门控 + 冷却90分钟 + 日上限6条
-  py sister_chat.py --force    # 跳过所有门控直接生成并发送（测试用，会真发给姐）
-网络边界（botcommon 白名单）：127.0.0.1(http, NapCat :3002) / 商汤+智谱免费优先（默认不烧 DeepSeek）
+  py sister_chat.py            # 常规轮询；关闭时只记一行 skip
+  py sister_chat.py --probe    # 打印开关 JSON，不生成不发送
+  py sister_chat.py --force    # 仅当 enabled=true 时跳过门控并发送（会真发）
+网络边界：关闭或 --probe 时不出网。开启时 127.0.0.1(http, NapCat :3002) / 免费池 LLM（默认不烧 DeepSeek）。
 """
 import json
 import random
@@ -24,6 +30,7 @@ import botcommon
 BASE = Path(__file__).resolve().parent
 STATE_FILE = BASE / "sister_chat_state.json"
 LOG_FILE = BASE / "sister_chat.log"
+CONFIG_FILE = BASE / "sister_chat_config.json"
 
 SISTER_QQ = "189636935"
 
@@ -44,14 +51,64 @@ def log(msg):
         pass
 
 
-def load_state():
-    if STATE_FILE.exists():
-        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+def _enabled_flag(value):
+    """只认明确的开/关。无法识别时关闭，避免字符串 "false" 被当成真。"""
+    if value is True or value == 1:
+        return True
+    if value is False or value == 0:
+        return False
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("true", "yes", "on", "1"):
+            return True
+        if v in ("false", "no", "off", "0"):
+            return False
+    return False
+
+
+def load_config(path=None):
+    """读总开关。缺文件、坏 JSON、非对象、缺 enabled 一律关闭。"""
+    path = Path(path) if path else CONFIG_FILE
+    if not path.is_file():
+        return {"enabled": False, "source": "missing"}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"enabled": False, "source": "invalid"}
+    if not isinstance(raw, dict):
+        return {"enabled": False, "source": "invalid"}
+    return {"enabled": _enabled_flag(raw.get("enabled", False)), "source": "file"}
+
+
+def proactive_allowed(cfg):
+    """总开关。False 时不调用 LLM、不调用 NapCat。"""
+    return bool((cfg or {}).get("enabled", False))
+
+
+def probe_status(cfg=None):
+    """开关探测。不生成消息、不发送。"""
+    cfg = load_config() if cfg is None else cfg
+    allowed = proactive_allowed(cfg)
+    return {
+        "config_file": CONFIG_FILE.name,
+        "enabled": allowed,
+        "config_source": cfg.get("source", "given"),
+        "proactive_private_send": "on" if allowed else "off",
+        "force_overrides_switch": False,
+        "blocks_before_llm": not allowed,
+        "blocks_before_napcat": not allowed,
+    }
+
+
+def load_state(path=None):
+    path = Path(path) if path else STATE_FILE
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
     return {"last_sent": 0, "date": "", "count": 0}
 
 
-def save_state(st):
-    botcommon.write_json_atomic(STATE_FILE, st, indent=1)
+def save_state(st, path=None):
+    botcommon.write_json_atomic(Path(path) if path else STATE_FILE, st, indent=1)
 
 
 def read_json(path):
@@ -114,33 +171,47 @@ def llm_message(context):
     return text[:150]
 
 
-def main():
-    force = "--force" in sys.argv
-    now = time.time()
+def main(argv=None, send_private=None, llm_fn=None, config_path=None, state_path=None, roll=None, now_fn=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    cfg = load_config(config_path)
+    if "--probe" in argv:
+        status = probe_status(cfg)
+        print(json.dumps(status, ensure_ascii=False))
+        return status
+
+    # 总开关在门控、读状态、LLM、发送之前。--force 不能绕过。
+    if not proactive_allowed(cfg):
+        log("skip: 总开关关闭（sister_chat_config.json enabled=false），不生成、不发送")
+        return {"action": "skip", "reason": "disabled", "sent": False}
+
+    force = "--force" in argv
+    now = (now_fn or time.time)()
     today = datetime.now().strftime("%Y-%m-%d")
-    st = load_state()
+    st = load_state(state_path)
     if st.get("date") != today:
         st["date"], st["count"] = today, 0
 
     if not force:
         if now - st.get("last_sent", 0) < MIN_GAP_SEC:
             log("skip: 冷却中（距上次 %d 分钟）" % ((now - st["last_sent"]) / 60))
-            return
+            return {"action": "skip", "reason": "cooldown", "sent": False}
         if st["count"] >= MAX_PER_DAY:
             log("skip: 今日已发 %d 条达上限" % st["count"])
-            return
-        if random.random() >= PROB:
+            return {"action": "skip", "reason": "daily_cap", "sent": False}
+        if (roll or random.random)() >= PROB:
             log("roll: 未触发")
-            return
+            return {"action": "skip", "reason": "roll", "sent": False}
 
-    msg = llm_message(build_context())
+    msg = (llm_fn or llm_message)(build_context())
     if not msg or "[SKIP]" in msg:
         log("skip: 大肥鱼此刻没话说")
-        return
-    botcommon.napcat_send_private(SISTER_QQ, msg)
+        return {"action": "skip", "reason": "empty", "sent": False}
+    sender = send_private or (lambda text: botcommon.napcat_send_private(SISTER_QQ, text))
+    sender(msg)
     st["last_sent"], st["count"] = now, st.get("count", 0) + 1
-    save_state(st)
+    save_state(st, state_path)
     log("SENT to 姐: " + msg.replace("\n", " ")[:100])
+    return {"action": "sent", "reason": "sent", "sent": True}
 
 
 if __name__ == "__main__":

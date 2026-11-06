@@ -19,8 +19,9 @@ MAILTO=""
 # 每10分钟：DeepSeek 余额守护 + 付费日预算门控（<2元求救；超 daily_cny 踢主聊付费）
 */10 * * * * cd /root/maibot && /usr/bin/python3 token_guard.py >> logs/cron_token_guard.log 2>&1
 
-# 每30分钟：随机主动找姐聊天（概率门控+冷却+日上限）
-*/30 * * * * cd /root/maibot && /usr/bin/python3 sister_chat.py >> logs/cron_sister_chat.log 2>&1
+# 已关闭：姐的定时/主动私聊。总开关 sister_chat_config.json enabled=false
+# （脚本被叫到也会在 LLM/发送前返回）。重装本 crontab 时不要恢复下一行。
+# */30 * * * * cd /root/maibot && /usr/bin/python3 sister_chat.py >> logs/cron_sister_chat.log 2>&1
 
 # 每小时:10：Qzone 社交（点赞+AI评论，拟人节律）
 10 * * * * cd /root/maibot && /usr/bin/python3 qzone_social.py >> logs/cron_qzone_social.log 2>&1

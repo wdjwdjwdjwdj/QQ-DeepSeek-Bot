@@ -4,6 +4,8 @@
 按 schedule_config.json 的时间表，通过本机 NapCat HTTP API 给特定人/群发消息。
 由计划任务 MaiBotScheduledSender 每分钟调用一次，匹配当前 HH:MM 的启用任务即发送，
 state 文件记录当天已发记录防止重复。
+sister_chat_config.json 的 enabled=false 时，跳过发给姐的私聊任务（含 --test）；
+群任务和其他私聊照常。开关缺省/无法识别也视为关闭。
 
 用法：
     py scheduled_sender.py                # 常规运行（计划任务调用）
@@ -21,6 +23,7 @@ from datetime import datetime
 from pathlib import Path
 
 import botcommon
+import sister_chat
 
 BASE = Path(__file__).resolve().parent
 CONFIG_FILE = BASE / "schedule_config.json"
@@ -61,6 +64,18 @@ def life_hook_message():
 
 
 
+def sister_outbound_blocked(task, cfg=None):
+    """总开关关闭时，不向姐发定时私聊。群消息和其他私聊不拦。"""
+    target = task.get("target") or {}
+    if target.get("type") != "private":
+        return False
+    if cfg is None:
+        cfg = sister_chat.load_config()
+    if sister_chat.proactive_allowed(cfg):
+        return False
+    return str(target.get("id")).strip() == str(sister_chat.SISTER_QQ).strip()
+
+
 def send_one(task, text):
     if task["target"]["type"] == "private":
         res = botcommon.http_json(
@@ -88,9 +103,9 @@ def save_state(st):
     botcommon.write_json_atomic(STATE_FILE, st)
 
 
-def main():
+def main(argv=None):
     test_name = None
-    args = sys.argv[1:]
+    args = list(sys.argv[1:] if argv is None else argv)
     if "--test" in args:
         idx = args.index("--test")
         if idx + 1 >= len(args):
@@ -147,6 +162,10 @@ def main():
                 if key in st["sent"]:
                     continue
                 matched = True
+
+        if sister_outbound_blocked(task):
+            print("跳过 [" + name + "]: 姐的定时私聊已关闭")
+            continue
 
         text = None
         if task.get("life_hook"):

@@ -1,0 +1,4 @@
+{
+  "enabled": false,
+  "note": "总开关。false=sister_chat 不生成、不发送（含 --force），scheduled_sender 里发给姐的私聊任务也不发。群任务和其他私聊照常。缺文件或值无法识别也视为关闭。姐发来的消息仍由 MaiBot 回复，人设与记忆不在此文件。"
+}
