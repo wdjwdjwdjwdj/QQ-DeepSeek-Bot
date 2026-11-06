@@ -41,6 +41,7 @@ Windows 计划任务（每分钟级短进程，无长驻）：
   MaiBotScheduledSender PT1M   scheduled_sender.py 读 schedule_config.json 发定时消息
   MaiBotWelcomeSender   PT2M   welcome_bot.py      新人入群欢迎：轮询群名单diff→智谱现写大肥鱼口吻欢迎语@新人(LLM挂回退随机池,首见群只记基线,--dry-run只打印不发)
   MaiBotPersonaAudit    每日03:00 persona_audit.py 人设漂移审查
+  person_audit.py       按需手动（不挂 cron） person_info ↔ friends.json 只读对照，不删记忆
   MaiBotDailyLife       每日05:00 daily_life.py     生活引擎：时间线/鱼粮/拍立得(已停用)/周观察
   MaiBotQzonePoster     每日19:40 qzone_poster.py   朋友圈：读post_draft经桥接发说说(只发文案,85%概率)
   MaiBotQzoneSocial     PT1H   qzone_social.py     Qzone社交：刷好友动态+关系分加权点赞+AI评论(拟人节律,每日赞≤12评≤4,键uin:tid幂等,--dry-run只读)
@@ -90,7 +91,8 @@ ZCode 自动化（非 Windows 计划任务，迁移服务器后应删除）：
 
 ## cognition.py 的 prompt 注入（特殊机制，改动须知）
 
-- `inject_prompts()` 直接改写 `my-maibot/config/bot_config.toml` 中 `group_chat_prompt = ` 与 `private_chat_prompts = ` 两行（锚点行），以 `【认知引擎v1】` 首尾标记整段替换。
+- 按人检索失败不得放行；认人时 user_id 优先于昵称（`person_memory.py`，FriendLedger.on_load 薄包装上游，不 fork）。
+- `inject_prompts()` 直接改写 `my-maibot/config/bot_config.toml` 中 `group_chat_prompt = ` 与 `private_chat_prompts = ` 两行（锚点行），以 `【认知引擎v1】` 首尾标记整段替换。群/私各注入一行场面（接梗 vs 不要主动@），工作记忆开头固定「内心只影响语气，禁止整段独白当消息」。
 - **不可改这两行的键名**，不可改成多行 TOML 字符串（注入按"单行字符串右引号前插入"处理）。
 - 写入流程：tmp 文件 → `tomllib` 解析验证 → `os.replace`，改动此函数必须保留这三步。
 
@@ -106,6 +108,8 @@ py verify_budget_gate.py       # 日预算门控纯函数 + toml rewrite
 py verify_budget_gate.py --dry-run  # 对照生产 model_config 预览踢/恢复（不写盘）
 py verify_noreply_watch.py     # 进消息不回复告警纯函数（哑火/健康/幂等，不发 QQ）
 py verify_free_cascade.py      # TokenHub tx-hy3 级联顺序 + 对话池补丁（不改 planner/embedding，不出网）
+py verify_person_memory.py     # 按人 fail-closed / user_id 优先 / 账本不跨群暗绑 / 审计只读
+py verify_persona_anchor.py    # 人设短锚 + 注意力分表 + 工作记忆口气（不改生产 toml）
 ```
 
 涉及守护/自愈逻辑的改动：先在纸上推演状态机（down_since / last_start / 冷却 / 超时重拉四态），确认每条转移都有出口，再动代码。

@@ -31,6 +31,9 @@ MAILTO=""
 # 每日 03:00：人设漂移审查
 0 3 * * * cd /root/maibot && /usr/bin/python3 persona_audit.py >> logs/cron_persona.log 2>&1
 
+# 按需只读（不挂 cron）：python3 person_audit.py
+# person_info ↔ friends.json 对照，不删记忆。
+
 # 每日 05:00：生活引擎（时间线/鱼粮/周观察）
 0 5 * * * cd /root/maibot && /usr/bin/python3 daily_life.py >> logs/cron_dailylife.log 2>&1
 

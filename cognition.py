@@ -31,6 +31,10 @@ PAD_HALF_LIFE = 4 * 3600          # 情绪半衰期 4 小时（向中性衰减�
 MOOD_PROMPT_TAG = "【认知引擎v1】"  # 旧标记，注入时一并清除
 WORKING_MEMORY_TAG = "【工作记忆】"  # MemGPT 式 working context 标记
 WORKING_MEMORY_MAX_CHARS = 900      # 硬预算：高信号优先，超则裁切低优先级
+# 内心留在 working context，SillyTavern 式独白不出站。
+INNER_VOICE_GUARD = "内心只影响语气，禁止整段独白当消息。"
+SCENE_GROUP = "群里：接梗、带气氛。主动@仅冷场或刚出现有趣点。"
+SCENE_PRIVATE = "私聊：对着这个人说，少广播感，不要主动@。"
 
 ALLOWED = {"open.bigmodel.cn": {"https"}, "127.0.0.1": {"http"}}
 ALLOWED_DS = {"api.deepseek.com": {"https"}}  # L0-mem
@@ -126,7 +130,10 @@ def mood_text(st):
         level = "高" if v > 0.3 else ("低" if v < -0.3 else "中")
         return f"{name}{level}({v:+.1f})"
     dim = "低落" if p < -0.3 else ("开心" if p > 0.3 else "平静")
-    style = "话少而短，慵懒地回" if (p < -0.2 and a < 0) else ("兴奋多话，语气上扬" if a > 0.3 else "按平时风格")
+    # 高活跃只改语气，不把内心写成对外多话。MemGPT：working 影响语气，reply 才是出口。
+    style = "话少而短，慵懒地回" if (p < -0.2 and a < 0) else (
+        "活泼短句，语气轻快，不空发内心" if a > 0.3 else "按平时风格"
+    )
     return f"{seg('愉悦', p)} {seg('活跃', a)}，{dim}，回复风格：{style}。原因：{st['cause']}"
 
 
@@ -237,10 +244,16 @@ def archive_pointer_line():
     return "档案指针：" + headers[-1][3:][:50] + "（细节在笔记里，按需回想）"
 
 
-def build_working_memory_parts(st):
-    """按优先级组装工作记忆行；返回未拼接的 parts（已含首尾标记）。"""
+def build_working_memory_parts(st, scene=""):
+    """按优先级组装工作记忆行；返回未拼接的 parts（已含首尾标记）。
+
+    scene 区分群/私：群侧重接梗，私聊不把「主动@」套进来。
+    """
     # priority buckets: (prio, text)  smaller prio = keep first
     buckets = []
+    buckets.append((0, INNER_VOICE_GUARD))
+    if scene:
+        buckets.append((0, scene))
     buckets.append((0, "内心：" + mood_text(st)))
     now = time.time()
     # 过期超过 3 天的意图直接丢掉（MemGPT: working context 不养僵尸事实）
@@ -296,20 +309,29 @@ def inject_prompts(st):
     长期细节靠 A_Memorix 启发式召回 + memory_notes，不进每轮 prompt。
     TOML 值内不能有裸换行——注入文本换行转字面 \\n。
     """
-    parts = build_working_memory_parts(st)
-    parts = [p.replace(chr(34), "”").replace(chr(92), "／") for p in parts]
-    bsn = chr(92) + "n"
-    inject = bsn.join(parts)
+    def _pack(scene):
+        parts = build_working_memory_parts(st, scene)
+        parts = [p.replace(chr(34), "”").replace(chr(92), "／") for p in parts]
+        return bsn.join(parts)
 
-    lines = BOT_CONFIG.read_text(encoding="utf-8", newline="").splitlines(keepends=True)
+    bsn = chr(92) + "n"
+    group_inject = _pack(SCENE_GROUP)
+    private_inject = _pack(SCENE_PRIVATE)
+
+    # Path.read_text 在 3.12 没有 newline 参数；open(newline="") 才能保住原换行。
+    with open(BOT_CONFIG, encoding="utf-8", newline="") as fh:
+        lines = fh.read().splitlines(keepends=True)
     hits = 0
     for i, ln in enumerate(lines):
         stripped = ln.lstrip()
-        if stripped.startswith("group_chat_prompt = ") or stripped.startswith("private_chat_prompts = "):
+        is_group = stripped.startswith("group_chat_prompt = ")
+        is_private = stripped.startswith("private_chat_prompts = ")
+        if is_group or is_private:
             # 清旧认知标记 + 新工作记忆标记
             for tag in (MOOD_PROMPT_TAG, WORKING_MEMORY_TAG):
                 if tag in ln:
                     ln = re.sub(re.escape(tag) + ".*?" + re.escape(tag), "", ln)
+            inject = group_inject if is_group else private_inject
             new_ln = _append_to_toml_line(ln, inject)
             if new_ln:
                 lines[i] = new_ln
@@ -320,14 +342,20 @@ def inject_prompts(st):
     tmp.write_text("".join(lines), encoding="utf-8", newline="")
     import tomllib
     c2 = tomllib.load(open(tmp, "rb"))
-    assert WORKING_MEMORY_TAG in c2["chat"]["reply_style"]["group_chat_prompt"]
-    assert WORKING_MEMORY_TAG in c2["chat"]["reply_style"]["private_chat_prompts"]
+    group_prompt = c2["chat"]["reply_style"]["group_chat_prompt"]
+    private_prompt = c2["chat"]["reply_style"]["private_chat_prompts"]
+    assert WORKING_MEMORY_TAG in group_prompt
+    assert WORKING_MEMORY_TAG in private_prompt
     # 旧标记不得残留
-    assert MOOD_PROMPT_TAG not in c2["chat"]["reply_style"]["group_chat_prompt"]
-    assert MOOD_PROMPT_TAG not in c2["chat"]["reply_style"]["private_chat_prompts"]
+    assert MOOD_PROMPT_TAG not in group_prompt
+    assert MOOD_PROMPT_TAG not in private_prompt
+    assert INNER_VOICE_GUARD in group_prompt and INNER_VOICE_GUARD in private_prompt
+    assert "接梗" in group_prompt
+    assert "不要主动@" in private_prompt
+    assert "主动@仅" not in private_prompt
     tmp.replace(BOT_CONFIG)
-    packed = inject.replace(chr(92) + "n", " | ")
-    print("已注入工作记忆包（%d 字硬预算内，热重载生效）: %s" % (WORKING_MEMORY_MAX_CHARS, packed[:180]))
+    packed = group_inject.replace(chr(92) + "n", " | ")
+    print("已注入工作记忆包（%d 字硬预算内，群/私场面分开，热重载生效）: %s" % (WORKING_MEMORY_MAX_CHARS, packed[:180]))
 
 
 def check_intentions_done(rows, st):
