@@ -128,13 +128,24 @@ def replace_top_level_string(text, key, value):
     return "".join(lines)
 
 
+def _section_header_name(ln):
+    """取出 [a.b] 段名；允许行尾注释。非段头返回 None。"""
+    stripped = ln.strip()
+    if not stripped.startswith("[") or stripped.startswith("[["):
+        return None
+    body = stripped.split("#", 1)[0].strip()
+    if not (body.startswith("[") and body.endswith("]")):
+        return None
+    return body[1:-1].strip()
+
+
 def upsert_section(text, section, values):
     """在 [section] 里改已有键，没有的键补上。不存在整段则追加到文件末尾。"""
     header = "[" + section + "]"
     lines = text.splitlines(keepends=True)
     start = None
     for i, ln in enumerate(lines):
-        if ln.strip() == header:
+        if _section_header_name(ln) == section:
             start = i
             break
     if start is None:
@@ -148,8 +159,8 @@ def upsert_section(text, section, values):
 
     end = len(lines)
     for j in range(start + 1, len(lines)):
-        stripped = lines[j].strip()
-        if stripped.startswith("[") and stripped.endswith("]") and not stripped.startswith("[["):
+        name = _section_header_name(lines[j])
+        if name is not None:
             end = j
             break
     seen = set()
