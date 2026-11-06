@@ -62,7 +62,7 @@ ZCode 自动化（非 Windows 计划任务，迁移服务器后应删除）：
                         端口被占自动退出；手动重启用 onebot-qzone/start_bridge.bat）
 ```
 
-免费对话级联（cron `llm_free_chat`，2026-10-31）：Z.AI → 智谱 → OpenRouter → **TokenHub `tx-hy3`**（平台 model `hy3`，TencentMaaS）→ 商汤。replyer / utils / fast_model 中后段同步挂 `tx-hy3`（服务器 `python3 deploy/add_tokenhub_chat.py`，幂等）。planner 首位仍是 `deepseek-flash-planner`，embedding 不动。
+免费对话级联（cron `llm_free_chat`，2026-11-06）：智谱 → Z.AI（一次 429 熔断 10 分钟，给互动让配额）→ OpenRouter → **TokenHub `tx-hy3`**（平台 model `hy3`，TencentMaaS）→ 商汤。尾部三家保留，探测失败后 30 分钟内不再盲探。空正文/纯标点不算成功；只有调用方传 `require_tool_call=True` 时，没有 tool_call 也不算成功。默认 `allow_paid=False`。emoji / learner（源码确认不传 tools；emoji 列表为空会落到 planner）由服务器 `python3 deploy/apply_free_pool_routing.py` 钉成同一免费 sequential 池。replyer / utils / fast_model 只把 Z.AI 挪到智谱后面，不删尾部。planner 首位仍是 `deepseek-flash-planner`，embedding / voice / memory 不动。
 
 ## 目录红线
 
@@ -108,6 +108,7 @@ py verify_budget_gate.py       # 日预算门控纯函数 + toml rewrite
 py verify_budget_gate.py --dry-run  # 对照生产 model_config 预览踢/恢复（不写盘）
 py verify_noreply_watch.py     # 进消息不回复告警纯函数（哑火/健康/幂等，不发 QQ）
 py verify_free_cascade.py      # TokenHub tx-hy3 级联顺序 + 对话池补丁（不改 planner/embedding，不出网）
+py verify_free_routing.py      # emoji/learner 不走 DeepSeek；空响应不算成功；ZAI 429 让位；尾部仍在
 py verify_person_memory.py     # 按人 fail-closed / user_id 优先 / 账本不跨群暗绑 / 审计只读
 py verify_persona_anchor.py    # 人设短锚 + 注意力分表 + 工作记忆口气（不改生产 toml）
 py verify_sister_chat.py       # 姐定时私聊总开关：enabled=false 时不调用 LLM/NapCat；crontab 无生效行
@@ -128,7 +129,7 @@ py verify_sister_chat.py       # 姐定时私聊总开关：enabled=false 时不
 约定（`model_config.toml` 在服务器、不进仓；换机重建时按此恢复）：
 
 - **planner**：首位必须是会稳定 tool call 的模型（当前 `deepseek-flash-planner`）；免费 flash 只能跟在后面作备用，不能单独扛 Planner
-- **replyer**：可免费优先（`zai-flash` → 智谱 4-flash → …），`deepseek-flash-reply` 放池尾兜底
+- **replyer**：可免费优先（智谱 4-flash → `zai-flash` → …），`deepseek-flash-reply` 放池尾兜底
 - 勿再「踢光 DeepSeek」且只留不会 tool call 的免费模型在 planner
 - **可执行闸门**：`python3 verify_planner_pool.py`（白名单 `TOOL_CAPABLE_PLANNER_HEADS`）；`night_watch` 每轮静态检查，失败=CRITICAL
 - **2026-10-30 冒烟**：硬提示下 `deepseek-flash-planner` PASS；`zp-4flash-b` FAIL（把 tool JSON 当正文）；`zai-flash`/`zp-4flash` 简单硬提示偶发 PASS，**不足以**升 planner 首位——须生产私聊实测后再扩白名单
